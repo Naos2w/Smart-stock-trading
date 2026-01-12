@@ -68,6 +68,9 @@ export interface StockData extends StockRaw {
   roe: number;
   dividendYield: number;
   revenueYoy: number;
+  // Optional expanded fundamentals (may be missing depending on data source)
+  epsYoy?: number;
+  debtRatio?: number;
   
   institutionalOwnership: number; 
   institutionalAction: string; 

@@ -57,6 +57,39 @@ const inferMarketRegime = (ref: { price: number; ma240: number; ma240Prev?: numb
   return 'SIDEWAYS';
 };
 
+// Lightweight fundamental safety filter for LONG_TERM scoring.
+// Returns 0–20 points based on simple growth and leverage checks.
+const computeFundamentalScore = (stock: StockData): number => {
+  const { epsYoy, revenueYoy, debtRatio } = stock;
+
+  const hasEpsYoy = typeof epsYoy === 'number';
+  const hasRevYoy = typeof revenueYoy === 'number';
+  const hasDebt = typeof debtRatio === 'number';
+
+  // No fundamental data available → neutral score
+  if (!hasEpsYoy && !hasRevYoy && !hasDebt) {
+    return 10;
+  }
+
+  let score = 0;
+
+  if (hasEpsYoy && (epsYoy as number) > 0) {
+    score += 8;
+  }
+
+  if (hasRevYoy && revenueYoy > 0) {
+    score += 6;
+  }
+
+  // Safe debt ratio threshold (e.g., < 60%)
+  if (hasDebt && (debtRatio as number) > 0 && (debtRatio as number) < 0.6) {
+    score += 6;
+  }
+
+  // Clamp into 0–20 range as a lightweight filter
+  return Math.max(0, Math.min(20, score));
+};
+
 const inferAssetType = (data: Partial<StockData>): 'STOCK' | 'ETF' => {
   if (data.assetType === 'ETF') return 'ETF';
   const symbol = (data.symbol || '').toUpperCase();
@@ -417,12 +450,17 @@ export const calculateLongTermScore = (stock: StockData, lang: AppLanguage = 'zh
     else if (volatility <= 0.05) volatilityScore += 10;
   }
 
-  const totalScore = Math.max(0, Math.min(100, trendScore + structureScore + drawdownScore + volatilityScore));
+  const technicalScore = Math.max(0, Math.min(100, trendScore + structureScore + drawdownScore + volatilityScore));
+
+  const fundamentalScore = computeFundamentalScore(stock);
+
+  const totalScore = Math.max(0, Math.min(100, technicalScore + fundamentalScore));
 
   const regime = inferMarketRegime(stock);
 
   let action: 'INVEST' | 'SCALE_IN' | 'WAIT' = 'WAIT';
-  if (totalScore >= 80) action = 'INVEST';
+  // INVEST requires strong combined score AND sufficiently positive fundamentals
+  if (totalScore >= 80 && fundamentalScore >= 12) action = 'INVEST';
   else if (totalScore >= 60) action = 'SCALE_IN';
 
   if (regime === 'BEAR') {
