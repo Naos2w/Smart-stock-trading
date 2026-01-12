@@ -1,0 +1,5 @@
+{
+  "name": "Smart Stock Trading",
+  "description": "A comprehensive stock analysis dashboard featuring real-time simulation, Gemini AI-powered insights, watchlist management, and investment calculators for TW and US markets.",
+  "requestFramePermissions": []
+}

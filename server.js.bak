@@ -1,0 +1,295 @@
+import express from 'express';
+import cors from 'cors';
+import YahooFinance from 'yahoo-finance2'; // Changed to named import
+
+const app = express();
+const PORT = 3001;
+const yahooFinance = new YahooFinance({}); // Instantiated as requested
+
+app.use(cors());
+
+// Check for Finnhub Key
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY;
+
+app.get('/', (req, res) => {
+  res.send('Smart Stock Trading Backend is Running! (v3.2 Custom Instance)');
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: Date.now() });
+});
+
+// --- Math Helpers ---
+const calculateSMA = (quotes, period) => {
+  if (!quotes || quotes.length < period) return 0;
+  const slice = quotes.slice(quotes.length - period);
+  const sum = slice.reduce((acc, q) => acc + q.close, 0);
+  return sum / period;
+};
+
+const calculateVolSMA = (quotes, period) => {
+  if (!quotes || quotes.length < period) return 0;
+  const slice = quotes.slice(quotes.length - period);
+  const sum = slice.reduce((acc, q) => acc + q.volume, 0);
+  return sum / period;
+};
+
+const calculateEMA = (quotes, period, prevEMA = null) => {
+  if (!quotes || quotes.length === 0) return 0;
+  const k = 2 / (period + 1);
+  let ema = quotes[0].close; 
+  for (let i = 1; i < quotes.length; i++) {
+    ema = (quotes[i].close * k) + (ema * (1 - k));
+  }
+  return ema;
+};
+
+const calculateRSI = (quotes, period = 14) => {
+  if (!quotes || quotes.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = quotes[i].close - quotes[i - 1].close;
+    if (change > 0) gains += change;
+    else losses -= change;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  let rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+};
+
+const calculateATR = (quotes, period = 14) => {
+  if (!quotes || quotes.length < period + 1) return 0;
+  const ranges = [];
+  for(let i=1; i<quotes.length; i++) {
+      const high = quotes[i].high;
+      const low = quotes[i].low;
+      const prevClose = quotes[i-1].close;
+      const tr = Math.max(high-low, Math.abs(high-prevClose), Math.abs(low-prevClose));
+      ranges.push(tr);
+  }
+  if (ranges.length < period) return 0;
+  const recentRanges = ranges.slice(ranges.length - period);
+  return recentRanges.reduce((a,b)=>a+b, 0) / period;
+};
+
+const calculateKD = (quotes, period = 9) => {
+    if (!quotes || quotes.length < period) return { k: 50, d: 50 };
+    const window = quotes.slice(quotes.length - period);
+    const lowMin = Math.min(...window.map(q => q.low));
+    const highMax = Math.max(...window.map(q => q.high));
+    const close = window[window.length - 1].close;
+    
+    let rsv = 50;
+    if (highMax !== lowMin) {
+        rsv = ((close - lowMin) / (highMax - lowMin)) * 100;
+    }
+    
+    const k = (2/3) * 50 + (1/3) * rsv; 
+    const d = (2/3) * 50 + (1/3) * k;
+    return { k, d };
+}
+
+// --- Finnhub Fetcher ---
+const fetchFinnhubQuote = async (symbol) => {
+  if (!FINNHUB_KEY) return null;
+  try {
+    const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_KEY}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.c === 0 && data.pc === 0) return null;
+    return {
+        ...data,
+        source: 'Finnhub',
+        t: Date.now() // Finnhub often returns instant snapshot
+    };
+  } catch (e) {
+    console.error("Finnhub Fetch Error:", e.message);
+    return null;
+  }
+};
+
+// --- API Routes ---
+
+app.get('/api/search', async (req, res) => {
+  const query = req.query.q;
+  if (!query) return res.json([]);
+  try {
+    const result = await yahooFinance.search(query);
+    const quotes = result.quotes
+      .filter(q => q.isYahooFinance)
+      .map(q => ({
+        symbol: q.symbol,
+        name: q.shortname || q.longname || q.symbol,
+        nameEn: q.symbol,
+        market: q.exchange,
+      }));
+    res.json(quotes);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/stock/:symbol', async (req, res) => {
+  try {
+    let { symbol } = req.params;
+    if (/^\d{4}$/.test(symbol)) symbol = `${symbol}.TW`;
+
+    const isUS = !symbol.includes('.TW') && !symbol.includes('.TWO');
+    const pastDate = new Date();
+    pastDate.setDate(pastDate.getDate() - 400); 
+
+    // Fetch Strategy
+    const [quoteResult, historyResult, finnhubData] = await Promise.all([
+        yahooFinance.quote(symbol).catch(e => null),
+        yahooFinance.chart(symbol, { period1: pastDate, interval: '1d', includePrePost: true }).catch(e => null),
+        (isUS && FINNHUB_KEY) ? fetchFinnhubQuote(symbol) : Promise.resolve(null)
+    ]);
+
+    if ((!quoteResult && !finnhubData) || !historyResult) {
+       return res.status(404).json({ error: 'Stock data not available' });
+    }
+
+    // --- Intelligent Price Logic ---
+    let price, change, changePercent, volume, openPrice, lastTradeTime;
+    let isDelayed = false;
+    let isExtendedHours = false;
+
+    // Default from Yahoo Quote
+    if (quoteResult) {
+        // Determine correct price based on market state
+        const state = quoteResult.marketState; // PRE, REGULAR, POST, CLOSED
+        
+        if (state === 'PRE' && quoteResult.preMarketPrice) {
+            price = quoteResult.preMarketPrice;
+            change = quoteResult.preMarketChange;
+            changePercent = quoteResult.preMarketChangePercent;
+            lastTradeTime = quoteResult.preMarketTime;
+            isExtendedHours = true;
+        } else if ((state === 'POST' || state === 'POSTPOST' || state === 'CLOSED') && quoteResult.postMarketPrice) {
+            // Check if Post market is actually more recent/active than regular
+            price = quoteResult.postMarketPrice;
+            change = quoteResult.postMarketChange;
+            changePercent = quoteResult.postMarketChangePercent;
+            lastTradeTime = quoteResult.postMarketTime;
+            isExtendedHours = true;
+        } else {
+            // Regular Market
+            price = quoteResult.regularMarketPrice;
+            change = quoteResult.regularMarketChange;
+            changePercent = quoteResult.regularMarketChangePercent;
+            lastTradeTime = quoteResult.regularMarketTime;
+        }
+        
+        volume = quoteResult.regularMarketVolume;
+        openPrice = quoteResult.regularMarketOpen;
+        
+        // Yahoo explicitly tells us if data is delayed
+        if (quoteResult.exchangeDataDelayedBy && quoteResult.exchangeDataDelayedBy > 0) {
+            isDelayed = true;
+        }
+    }
+
+    // Override with Finnhub if US stock and Finnhub data is available
+    // Finnhub is usually real-time for US
+    if (finnhubData) {
+        price = finnhubData.c;
+        change = finnhubData.d;
+        changePercent = finnhubData.dp;
+        openPrice = finnhubData.o;
+        lastTradeTime = new Date(finnhubData.t * 1000); // Finnhub t is unix seconds (sometimes) or we use current time
+        isDelayed = false; // Assume Finnhub is Realtime
+    }
+    
+    // Fallback timestamp if missing
+    if (!lastTradeTime) lastTradeTime = new Date();
+
+    // --- Indicator Calc ---
+    const history = historyResult?.quotes || [];
+    const validHistory = history.filter(q => q.close !== null);
+
+    const ma5 = calculateSMA(validHistory, 5);
+    const ma10 = calculateSMA(validHistory, 10);
+    const ma20 = calculateSMA(validHistory, 20);
+    const ma60 = calculateSMA(validHistory, 60);
+    const ma120 = calculateSMA(validHistory, 120);
+    const ma240 = calculateSMA(validHistory, 240);
+    const vol5 = calculateVolSMA(validHistory, 5);
+    const vol20 = calculateVolSMA(validHistory, 20);
+    const atr = calculateATR(validHistory, 14);
+    
+    let rsi = 50, rsiPrev = 50;
+    if (validHistory.length > 15) {
+        rsi = calculateRSI(validHistory.slice(-15), 14);
+        rsiPrev = calculateRSI(validHistory.slice(0, -1).slice(-15), 14);
+    }
+
+    const { k, d } = calculateKD(validHistory, 9);
+
+    const ema12 = calculateEMA(validHistory.slice(-26), 12);
+    const ema26 = calculateEMA(validHistory.slice(-50), 26);
+    const macdLine = ema12 - ema26;
+    const signalLine = macdLine * 0.8; 
+    const macdHist = macdLine - signalLine;
+
+    const stockData = {
+      symbol: symbol.toUpperCase(),
+      name: quoteResult?.shortName || quoteResult?.longName || symbol,
+      nameEn: quoteResult?.symbol || symbol,
+      market: quoteResult?.exchangeName || (isUS ? 'US' : 'TW'),
+      
+      price: price || 0,
+      openPrice: openPrice || 0,
+      change: change ? parseFloat(change.toFixed(2)) : 0,
+      changePercent: changePercent ? parseFloat(changePercent.toFixed(2)) : 0,
+      volume: volume || 0,
+      avgVolume: quoteResult?.averageDailyVolume3Month || 0,
+      vol5, 
+      vol20, 
+      marketCap: quoteResult?.marketCap ? formatMarketCap(quoteResult.marketCap, quoteResult?.exchangeName || '') : 'N/A',
+      
+      // Fundamentals
+      peRatio: quoteResult?.trailingPE || 0,
+      eps: quoteResult?.epsTrailingTwelveMonths || 0,
+      roe: (quoteResult?.epsTrailingTwelveMonths && quoteResult?.bookValue) 
+           ? (quoteResult.epsTrailingTwelveMonths / quoteResult.bookValue) * 100 
+           : 0,
+      dividendYield: quoteResult?.dividendYield || 0,
+      revenueYoy: 0, 
+      institutionalOwnership: 0, 
+      
+      // Technicals
+      ma5, ma10, ma20, ma60, ma120, ma240,
+      rsi, rsiPrev,
+      atr,
+      kValue: k, dValue: d,
+      macdLine, signalLine, macdHist, macdHistPrev: macdHist,
+      
+      isMarketOpen: quoteResult?.marketState === 'REGULAR' || quoteResult?.marketState === 'OPEN', 
+      isDelayed: isDelayed,
+      lastTradeTime: new Date(lastTradeTime).getTime(),
+      currency: quoteResult?.currency || 'USD',
+      exchange: quoteResult?.exchangeName
+    };
+
+    res.json(stockData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const formatMarketCap = (val, market) => {
+  if (!val) return 'N/A';
+  const isTW = market.includes('TW') || market.includes('Tai');
+  const currencySymbol = isTW ? 'NT$' : 'US$';
+  if (val >= 1000000000000) return `${currencySymbol} ${(val / 1000000000000).toFixed(2)}T`;
+  if (val >= 1000000000) return `${currencySymbol} ${(val / 1000000000).toFixed(1)}B`;
+  return `${currencySymbol} ${(val / 1000000).toFixed(0)}M`;
+};
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Backend server running on http://localhost:${PORT}`);
+  if (FINNHUB_KEY) console.log("Finnhub API Enabled");
+});
