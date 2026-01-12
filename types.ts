@@ -177,6 +177,7 @@ export interface StrategyResult {
     volatilityLevel: 'LOW' | 'MED' | 'HIGH';
     riskNote: string;
     suggestedEntryZone?: [number, number];
+    weeksBelowMa240?: number;
   }
 
   export type CalculatorResult =

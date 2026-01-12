@@ -339,6 +339,21 @@ const ETF_TAG_RULES: TagRule[] = [
   }
 ];
 
+// Estimate how many weeks an ETF has traded below MA240 based on
+// recentHistorySample (approximation using last ~30 trading days).
+// Returns null when history or MA240 is unavailable.
+const estimateWeeksBelowMa240 = (stock: StockData): number | null => {
+  const { recentHistorySample, ma240 } = stock;
+  if (!recentHistorySample || !Array.isArray(recentHistorySample) || recentHistorySample.length === 0) return null;
+  if (!ma240 || ma240 <= 0) return null;
+
+  const daysBelow = recentHistorySample.filter(d => typeof d.close === 'number' && d.close < ma240).length;
+  if (daysBelow <= 0) return 0;
+
+  // Rough 5 trading days per week
+  return Math.floor(daysBelow / 5);
+};
+
 export const generateTags = (
   data: StockData,
   assetType: 'STOCK' | 'ETF',
@@ -595,7 +610,8 @@ export const calculateEtfInvestment = (
   stock: StockData,
   scoreResult?: EtfScoreResult
 ): EtfInvestmentPlan => {
-  const action = scoreResult?.action ?? calculateEtfScore(stock).action;
+  const baseScore = scoreResult ?? calculateEtfScore(stock);
+  let action = baseScore.action;
   const atrRatio = stock.price > 0 && stock.atr > 0 ? stock.atr / stock.price : 0;
 
   let volatilityLevel: 'LOW' | 'MED' | 'HIGH' = 'MED';
@@ -618,6 +634,16 @@ export const calculateEtfInvestment = (
     ? [roundTo(stock.ma240 * 0.97), roundTo(stock.ma240 * 1.03)]
     : undefined;
 
+  // Prolonged downtrend guard: disable DCA if ETF has stayed below MA240
+  // for roughly 4+ weeks and the long-term trend has not turned up yet.
+  const weeksBelow = estimateWeeksBelowMa240(stock);
+  const maSlopeUp = typeof stock.ma240Prev === 'number' && stock.ma240Prev > 0 && stock.ma240 > stock.ma240Prev;
+  const canResumeDca = stock.price > stock.ma240 && maSlopeUp;
+
+  if (weeksBelow !== null && weeksBelow >= 4 && !canResumeDca) {
+    action = 'WAIT';
+  }
+
   const allocationHint: 'one_time' | 'dca' = action === 'BUY' ? 'one_time' : 'dca';
 
   return {
@@ -626,7 +652,8 @@ export const calculateEtfInvestment = (
     allocationHint,
     volatilityLevel,
     riskNote,
-    suggestedEntryZone
+    suggestedEntryZone,
+    weeksBelowMa240: weeksBelow === null ? undefined : weeksBelow
   };
 };
 
