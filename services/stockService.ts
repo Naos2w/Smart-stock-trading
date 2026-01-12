@@ -16,6 +16,110 @@ import {
 
 export type MarketRegime = 'BULL' | 'SIDEWAYS' | 'BEAR';
 
+// --- CENTRAL SCORING CONFIGURATION ---
+// Default values match the previous hard-coded weights so that
+// refactoring does not change existing behaviour.
+
+type ShortTermWeights = {
+  trend: {
+    priceAboveMa20: number;
+    ma20AboveMa60: number;
+    ma20SlopeUp: number;
+    ma5AboveMa20Fallback: number;
+  };
+  momentum: {
+    rsiSweetSpot: number;
+    rsiNearSweetSpot: number;
+    rsiOverheatPenalty: number;
+    priceAboveAtrBand: number;
+  };
+  volume: {
+    vol5Gte20: number;
+    vol5Gte20Strong: number;
+    vol5LowPenalty: number;
+  };
+  risk: {
+    base: number;
+    rsiOverheatPenalty: number;
+    highAtrPenalty: number;
+    priceBelowMa20Penalty: number;
+  };
+  tags: {
+    maxAbsImpact: number;
+  };
+};
+
+type LongTermWeights = {
+  trendAboveMa240: number;
+  structureMa240Up: number;
+  structureMa240UpFallback: number;
+  structureMa60AboveMa240: number;
+  drawdownSafe: number;
+  volatilityLow: number;
+  volatilityMedium: number;
+};
+
+type EtfWeights = {
+  trendAboveMa240: number;
+  trendMa240Up: number;
+  trendPriceAboveMa240Fallback: number;
+  proximityNearMa240: number;
+  volatilityLow: number;
+  volatilityMedium: number;
+};
+
+export const scoringConfig: {
+  shortTermWeights: ShortTermWeights;
+  longTermWeights: LongTermWeights;
+  etfWeights: EtfWeights;
+} = {
+  shortTermWeights: {
+    trend: {
+      priceAboveMa20: 10,
+      ma20AboveMa60: 10,
+      ma20SlopeUp: 10,
+      ma5AboveMa20Fallback: 10,
+    },
+    momentum: {
+      rsiSweetSpot: 15,
+      rsiNearSweetSpot: 8,
+      rsiOverheatPenalty: -5,
+      priceAboveAtrBand: 10,
+    },
+    volume: {
+      vol5Gte20: 10,
+      vol5Gte20Strong: 5,
+      vol5LowPenalty: -5,
+    },
+    risk: {
+      base: 25,
+      rsiOverheatPenalty: -5,
+      highAtrPenalty: -5,
+      priceBelowMa20Penalty: -10,
+    },
+    tags: {
+      maxAbsImpact: 15,
+    },
+  },
+  longTermWeights: {
+    trendAboveMa240: 20,
+    structureMa240Up: 20,
+    structureMa240UpFallback: 10,
+    structureMa60AboveMa240: 10,
+    drawdownSafe: 30,
+    volatilityLow: 20,
+    volatilityMedium: 10,
+  },
+  etfWeights: {
+    trendAboveMa240: 30,
+    trendMa240Up: 20,
+    trendPriceAboveMa240Fallback: 10,
+    proximityNearMa240: 30,
+    volatilityLow: 20,
+    volatilityMedium: 10,
+  },
+};
+
 export const checkBackendHealth = async (): Promise<boolean> => {
   try {
     const response = await fetch('http://localhost:3001/health', { method: 'GET' });
@@ -388,81 +492,85 @@ export const generateTags = (
 
 // --- MODE 1: SHORT_TERM (SWING) SCORING ENGINE ---
 export const calculateSwingScore = (stock: StockData, lang: AppLanguage = 'zh'): SwingScoreResult => {
-    let trendScore = 0;
-    let momentumScore = 0;
-    let volumeScore = 0;
-    let riskScore = 25; // Base score
+  const { shortTermWeights } = scoringConfig;
 
-    const { price, ma20, ma20Prev, ma60, rsi, vol5, vol20, atr } = stock;
+  let trendScore = 0;
+  let momentumScore = 0;
+  let volumeScore = 0;
+  let riskScore = shortTermWeights.risk.base;
 
-    // 1. Trend Score (0–30)
-    if (price > ma20) trendScore += 10;
-    if (ma20 > ma60) trendScore += 10;
-    // Proxy for previous ma20 if not available (fallback to slope check via ma5/ma20 or just ma20 > ma60)
-    // However, backend now provides ma20Prev.
-    if (ma20Prev && ma20 > ma20Prev) trendScore += 10;
-    else if (!ma20Prev && stock.ma5 > ma20) trendScore += 10; // Fallback
+  const { price, ma20, ma20Prev, ma60, rsi, vol5, vol20, atr } = stock;
 
-    // 2. Momentum Score (0–25)
-    if (rsi >= 45 && rsi <= 65) momentumScore += 15;
-    else if (rsi >= 40 && rsi < 45) momentumScore += 8;
-    else if (rsi > 70) momentumScore -= 5;
-    
-    // Price strength relative to ATR band
-    if (price > ma20 + (atr * 0.3)) momentumScore += 10;
+  // 1. Trend Score
+  if (price > ma20) trendScore += shortTermWeights.trend.priceAboveMa20;
+  if (ma20 > ma60) trendScore += shortTermWeights.trend.ma20AboveMa60;
+  // Proxy for previous ma20 if not available (fallback to slope check via ma5/ma20 or just ma20 > ma60)
+  // However, backend now provides ma20Prev.
+  if (ma20Prev && ma20 > ma20Prev) trendScore += shortTermWeights.trend.ma20SlopeUp;
+  else if (!ma20Prev && stock.ma5 > ma20) trendScore += shortTermWeights.trend.ma5AboveMa20Fallback; // Fallback
 
-    // 3. Volume Score (0–20)
-    if (vol5 >= vol20) volumeScore += 10;
-    if (vol5 >= vol20 * 1.2) volumeScore += 5;
-    if (vol5 < vol20 * 0.7) volumeScore -= 5;
+  // 2. Momentum Score
+  if (rsi >= 45 && rsi <= 65) momentumScore += shortTermWeights.momentum.rsiSweetSpot;
+  else if (rsi >= 40 && rsi < 45) momentumScore += shortTermWeights.momentum.rsiNearSweetSpot;
+  else if (rsi > 70) momentumScore += shortTermWeights.momentum.rsiOverheatPenalty;
 
-    // 4. Risk Score (start from 25)
-    if (rsi > 75) riskScore -= 5;
-    if (atr > 0 && (atr / price) > 0.05) riskScore -= 5;
-    if (price < ma20) riskScore -= 10; 
+  // Price strength relative to ATR band
+  if (price > ma20 + (atr * 0.3)) momentumScore += shortTermWeights.momentum.priceAboveAtrBand;
 
-    // 5. Tag Score (Capped at +/- 15)
-    let tagScore = 0;
+  // 3. Volume Score
+  if (vol5 >= vol20) volumeScore += shortTermWeights.volume.vol5Gte20;
+  if (vol5 >= vol20 * 1.2) volumeScore += shortTermWeights.volume.vol5Gte20Strong;
+  if (vol5 < vol20 * 0.7) volumeScore += shortTermWeights.volume.vol5LowPenalty;
+
+  // 4. Risk Score
+  if (rsi > 75) riskScore += shortTermWeights.risk.rsiOverheatPenalty;
+  if (atr > 0 && (atr / price) > 0.05) riskScore += shortTermWeights.risk.highAtrPenalty;
+  if (price < ma20) riskScore += shortTermWeights.risk.priceBelowMa20Penalty;
+
+  // 5. Tag Score (Capped by configuration)
+  let tagScore = 0;
   const tags = generateTags(stock, stock.assetType, lang, 'SHORT_TERM');
   tags.forEach(t => tagScore += (t.scoreImpact || 0));
-    tagScore = Math.max(-15, Math.min(15, tagScore));
+  const maxAbsTag = shortTermWeights.tags.maxAbsImpact;
+  tagScore = Math.max(-maxAbsTag, Math.min(maxAbsTag, tagScore));
 
-    const totalScore = Math.max(0, Math.min(100, trendScore + momentumScore + volumeScore + riskScore + tagScore));
+  const totalScore = Math.max(0, Math.min(100, trendScore + momentumScore + volumeScore + riskScore + tagScore));
 
-    let action: 'ENTER' | 'WATCH' | 'AVOID' = 'AVOID';
-    if (totalScore >= 85) action = 'ENTER';
-    else if (totalScore >= 70) action = 'WATCH';
+  let action: 'ENTER' | 'WATCH' | 'AVOID' = 'AVOID';
+  if (totalScore >= 85) action = 'ENTER';
+  else if (totalScore >= 70) action = 'WATCH';
 
-    return {
-        totalScore,
-        action,
+  return {
+    totalScore,
+    action,
     details: { trend: trendScore, momentum: momentumScore, volume: volumeScore, risk: riskScore },
     tagsUsed: tags
-    };
+  };
 };
 
 // --- MODE 2: LONG_TERM (STOCK) SCORING ENGINE ---
 export const calculateLongTermScore = (stock: StockData, lang: AppLanguage = 'zh'): LongTermScoreResult => {
+  const { longTermWeights } = scoringConfig;
   const { price, ma60, ma240, ma240Prev, atr } = stock;
 
-  const trendScore = price > ma240 ? 20 : 0;
+  const trendScore = price > ma240 ? longTermWeights.trendAboveMa240 : 0;
 
   let structureScore = 0;
-  if (ma240Prev && ma240 > ma240Prev) structureScore += 20;
-  else if (!ma240Prev && price > ma240) structureScore += 10;
-  if (ma60 > ma240) structureScore += 10;
+  if (ma240Prev && ma240 > ma240Prev) structureScore += longTermWeights.structureMa240Up;
+  else if (!ma240Prev && price > ma240) structureScore += longTermWeights.structureMa240UpFallback;
+  if (ma60 > ma240) structureScore += longTermWeights.structureMa60AboveMa240;
 
   let drawdownScore = 0;
   if (ma240 > 0) {
     const dist = (price - ma240) / ma240;
-    if (dist > -0.20) drawdownScore += 30;
+    if (dist > -0.20) drawdownScore += longTermWeights.drawdownSafe;
   }
 
   let volatilityScore = 0;
   if (price > 0 && atr > 0) {
     const volatility = atr / price;
-    if (volatility < 0.03) volatilityScore += 20;
-    else if (volatility <= 0.05) volatilityScore += 10;
+    if (volatility < 0.03) volatilityScore += longTermWeights.volatilityLow;
+    else if (volatility <= 0.05) volatilityScore += longTermWeights.volatilityMedium;
   }
 
   const technicalScore = Math.max(0, Math.min(100, trendScore + structureScore + drawdownScore + volatilityScore));
@@ -501,24 +609,25 @@ export const calculateLongTermScore = (stock: StockData, lang: AppLanguage = 'zh
 
 // --- MODE 3: ETF (LONG TERM ONLY) SCORING ENGINE ---
 export const calculateEtfScore = (stock: StockData, lang: AppLanguage = 'zh'): EtfScoreResult => {
+  const { etfWeights } = scoringConfig;
   const { price, ma240, ma240Prev, atr } = stock;
 
   let trendScore = 0;
-  if (price > ma240) trendScore += 30;
-  if (ma240Prev && ma240 > ma240Prev) trendScore += 20;
-  else if (!ma240Prev && price > ma240) trendScore += 10;
+  if (price > ma240) trendScore += etfWeights.trendAboveMa240;
+  if (ma240Prev && ma240 > ma240Prev) trendScore += etfWeights.trendMa240Up;
+  else if (!ma240Prev && price > ma240) trendScore += etfWeights.trendPriceAboveMa240Fallback;
 
   let proximityScore = 0;
   if (ma240 > 0) {
     const dist = Math.abs(price - ma240) / ma240;
-    if (dist <= 0.10) proximityScore += 30;
+    if (dist <= 0.10) proximityScore += etfWeights.proximityNearMa240;
   }
 
   let volatilityScore = 0;
   if (price > 0 && atr > 0) {
     const volatility = atr / price;
-    if (volatility < 0.025) volatilityScore += 20;
-    else if (volatility < 0.04) volatilityScore += 10;
+    if (volatility < 0.025) volatilityScore += etfWeights.volatilityLow;
+    else if (volatility < 0.04) volatilityScore += etfWeights.volatilityMedium;
   }
 
   const totalScore = Math.max(0, Math.min(100, trendScore + proximityScore + volatilityScore));
