@@ -366,10 +366,17 @@ export default function App() {
   };
 
   const sortedAndFilteredWatchlist = useMemo(() => {
-      let list = [...watchlist];
-      if (marketFilter === 'TW') list = list.filter(s => isTwSymbol(s.symbol));
-      else if (marketFilter === 'US') list = list.filter(s => !isTwSymbol(s.symbol));
-      else if (marketFilter === 'ETF') list = list.filter(s => s.assetType === 'ETF');
+      const list = watchlist.filter(s => {
+          if (marketFilter === 'ETF') return s.assetType === 'ETF';
+          
+          // For ALL, TW, US -> Exclude ETFs, show only STOCK
+          if (s.assetType !== 'STOCK') return false;
+
+          if (marketFilter === 'TW') return isTwSymbol(s.symbol);
+          if (marketFilter === 'US') return !isTwSymbol(s.symbol);
+          
+          return true; // 'ALL'
+      });
 
       return list.sort((a, b) => {
           if (sortOption === 'SUITABILITY') return getSuitabilityScore(b) - getSuitabilityScore(a);
