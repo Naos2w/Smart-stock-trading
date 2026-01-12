@@ -206,7 +206,7 @@ export interface StrategyResult {
 
 // Shared Color Logic for TW vs US Markets
 export const getMarketColors = (market: string) => {
-    const isTW = market.includes('TW') || market.includes('Tai');
+    const isTW = market.includes('TW') || market.includes('TAI');
     
     // Base Colors
     const neutralText = 'text-gray-900 dark:text-white';

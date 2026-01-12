@@ -19,10 +19,12 @@ export const getGeminiInsight = async (
       ? "AI 分析暫時無法使用 (缺少 API Key)。" 
       : "AI Analysis unavailable (Missing API Key).";
   }
-
+  
   const isTW = payload.market.includes('TW') || payload.market.includes('Tai');
   const positiveEmoji = isTW ? '🔴' : '🟢';
   const negativeEmoji = isTW ? '🟢' : '🔴';
+  
+
 
   const languageDirective = lang === 'zh'
     ? '語言強制規則（優先級最高）：全篇必須使用繁體中文撰寫，嚴禁出現任何英文或其他語言用詞，也不可重複以多種語言輸出。'
@@ -98,23 +100,86 @@ export const getGeminiInsight = async (
 
   const contextJson = JSON.stringify({ ...payload, mode: effectiveMode }, null, 2);
 
-  const prompt = `
-${languageDirective}
-${colorRule}
+//   const prompt = `
+// ${languageDirective}
+// ${colorRule}
+// ${assetDirective}
+// ${modeGuidance}
+
+// CRITICAL UI OUTPUT RULE (Highest Priority):
+// - This is NOT an API response
+// - DO NOT output JSON, objects, arrays, braces, or code fences
+// - DO NOT use markdown fences (no \`\`\`)
+// - Output must be human-readable narrative text only
+// - The content will be rendered line-by-line in a React UI
+
+// ${structureInstruction.replace(/Plan[\s\S]*/g, '')}
+
+// Data context (for reasoning only, do not repeat or reformat):
+// ${contextJson}
+
+// Instruction:
+// Explain the investment plan to a human investor.
+// Do not invent indicators, numbers, or targets.
+// Do not restate raw data.
+// Focus on interpretation, reasoning, and execution mindset only.
+// `;
+
+const templates = {
+  zh: {
+    languageDirective: '語言強制規則（優先級最高）：全篇必須使用繁體中文撰寫，嚴禁出現任何英文或其他語言用詞，也不可重複以多種語言輸出。',
+    colorRule: `Taiwan market color rule: positive points use ${positiveEmoji}, negative points use ${negativeEmoji}.`,
+    structureInstruction: `輸出結構必須嚴格遵守下列順序與格式：
+1. 第一行必須以「Mode: 」起頭，直接寫出最終採用的分析模式與重點。
+2. 第二行必須以「Action Summary: 」起頭提供單句摘要。
+3. 接著列出所有正面重點，每行皆以「- ${positiveEmoji} 」開頭，使用純繁體中文敘述，不得出現其他符號或語言。
+4. 緊接列出所有風險重點，每行皆以「- ${negativeEmoji} 」開頭，使用純繁體中文敘述。
+5. 之後撰寫一段不分行的執行建議短段落（不得再出現項目符號、JSON 符號或英文字）。
+6. 最後獨立輸出一行「Plan」，緊接一個唯一 JSON 區塊。`,
+    modeGuidance: {
+      SHORT_TERM: 'Mode: SHORT_TERM 僅針對個股波段評估，專注進場區間、停損、目標價與持有天數。',
+      LONG_TERM: 'Mode: LONG_TERM 個股累積策略，專注 MA240 結構、風險回撤與波動度。',
+      ETF: 'Mode: ETF 長期累積策略，專注 MA240 位置、斜率、波動度與 DCA 或單筆投入。'
+    }
+  },
+  en: {
+    languageDirective: 'Language override (highest priority): respond entirely in English only. Do not include Chinese characters, other languages, or bilingual duplicates anywhere.',
+    colorRule: `Market color rule: positive points use ${positiveEmoji}, negative points use ${negativeEmoji}.`,
+    structureInstruction: `Rigid output order:
+1. First line must begin with "Mode: " and state the final analysis mode and emphasis.
+2. Second line must begin with "Action Summary: " and contain exactly one English sentence.
+3. List all positive points next, each line starting with "- ${positiveEmoji} " and containing only English text.
+4. Immediately list all risk points, each line starting with "- ${negativeEmoji} " and containing only English text.
+5. Follow with exactly one short execution note paragraph (no bullets, braces, or non-English words).
+6. Finish with a standalone line "Plan" and then a single JSON block. Narrative above must never include JSON syntax.`,
+    modeGuidance: {
+      SHORT_TERM: 'Mode: SHORT_TERM swing evaluation for stocks only. Focus strictly on entry zone, stop loss, target, and holding days.',
+      LONG_TERM: 'Mode: LONG_TERM stock accumulation. Discuss MA240 structure, drawdown control, and volatility only.',
+      ETF: 'Mode: ETF long-term accumulation only. Emphasize MA240 position, MA240 slope, volatility, and accumulation strategy (DCA or one-time).'
+    }
+  }
+};
+
+const t = templates[lang];
+const modeText = t.modeGuidance[effectiveMode];
+
+const prompt = `
+${t.languageDirective}
+${t.colorRule}
 ${assetDirective}
-${modeGuidance}
+
+${modeText}
 
 CRITICAL UI OUTPUT RULE (Highest Priority):
 - This is NOT an API response
 - DO NOT output JSON, objects, arrays, braces, or code fences
-- DO NOT use markdown fences (no \`\`\`)
 - Output must be human-readable narrative text only
 - The content will be rendered line-by-line in a React UI
 
-${structureInstruction.replace(/Plan[\s\S]*/g, '')}
+${t.structureInstruction}
 
 Data context (for reasoning only, do not repeat or reformat):
-${contextJson}
+${JSON.stringify({ ...payload, mode: effectiveMode }, null, 2)}
 
 Instruction:
 Explain the investment plan to a human investor.
