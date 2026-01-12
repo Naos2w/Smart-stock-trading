@@ -14,6 +14,8 @@ import {
   EtfInvestmentPlan
 } from '../types';
 
+export type MarketRegime = 'BULL' | 'SIDEWAYS' | 'BEAR';
+
 export const checkBackendHealth = async (): Promise<boolean> => {
   try {
     const response = await fetch('http://localhost:3001/health', { method: 'GET' });
@@ -39,6 +41,21 @@ const KNOWN_ETF_SYMBOLS = new Set([
   'QQQ', 'SPY', 'VTI', 'VOO', 'IVV', 'DIA', 'ARKK', 'SOXX', 'IWM', 'EFA',
   'VNQ', 'XLK', 'XLE', 'XLF', 'XLY', 'XLP', 'XLI', 'XLB', 'XLV', 'XLC', 'XLU'
 ]);
+
+const inferMarketRegime = (ref: { price: number; ma240: number; ma240Prev?: number | null }): MarketRegime => {
+  const { price, ma240, ma240Prev } = ref;
+  if (!ma240 || !price) return 'SIDEWAYS';
+
+  const dist = (price - ma240) / ma240;
+  const hasPrev = typeof ma240Prev === 'number' && ma240Prev > 0;
+  const slopeUp = hasPrev && ma240 > (ma240Prev as number);
+  const slopeDown = hasPrev && ma240 < (ma240Prev as number);
+
+  if (price > ma240 && slopeUp) return 'BULL';
+  if (price < ma240 && slopeDown) return 'BEAR';
+  if (Math.abs(dist) <= 0.05) return 'SIDEWAYS';
+  return 'SIDEWAYS';
+};
 
 const inferAssetType = (data: Partial<StockData>): 'STOCK' | 'ETF' => {
   if (data.assetType === 'ETF') return 'ETF';
@@ -402,9 +419,17 @@ export const calculateLongTermScore = (stock: StockData, lang: AppLanguage = 'zh
 
   const totalScore = Math.max(0, Math.min(100, trendScore + structureScore + drawdownScore + volatilityScore));
 
+  const regime = inferMarketRegime(stock);
+
   let action: 'INVEST' | 'SCALE_IN' | 'WAIT' = 'WAIT';
   if (totalScore >= 80) action = 'INVEST';
   else if (totalScore >= 60) action = 'SCALE_IN';
+
+  if (regime === 'BEAR') {
+    action = 'WAIT';
+  } else if (regime === 'SIDEWAYS') {
+    if (action === 'INVEST') action = 'SCALE_IN';
+  }
 
   const tags = generateTags(stock, 'STOCK', lang, 'LONG_TERM');
 
@@ -445,9 +470,17 @@ export const calculateEtfScore = (stock: StockData, lang: AppLanguage = 'zh'): E
 
   const totalScore = Math.max(0, Math.min(100, trendScore + proximityScore + volatilityScore));
 
+  const regime = inferMarketRegime(stock);
+
   let action: 'BUY' | 'DCA' | 'WAIT' = 'WAIT';
   if (totalScore >= 85) action = 'BUY';
   else if (totalScore >= 70) action = 'DCA';
+
+  if (regime === 'BEAR') {
+    action = 'WAIT';
+  } else if (regime === 'SIDEWAYS') {
+    if (action === 'BUY') action = 'DCA';
+  }
 
   const tags = generateTags(stock, 'ETF', lang, 'ETF');
 
