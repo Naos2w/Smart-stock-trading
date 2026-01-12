@@ -153,6 +153,11 @@ export interface StrategyResult {
     };
   }
 
+  export type RiskState = {
+    level: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN';
+    key: 'LOW_VOL' | 'MED_VOL' | 'HIGH_VOL' | 'NO_DATA';
+  };
+
   export interface ShortTermInvestmentPlan {
     mode: 'SHORT_TERM';
     action: 'ENTER' | 'WATCH' | 'AVOID';
@@ -166,7 +171,7 @@ export interface StrategyResult {
     mode: 'LONG_TERM';
     action: 'INVEST' | 'SCALE_IN' | 'WAIT';
     allocationHint: 'periodic' | 'split';
-    riskNote: string;
+    riskState: RiskState;
     suggestedEntryZone?: [number, number];
   }
 
@@ -175,7 +180,7 @@ export interface StrategyResult {
     action: 'BUY' | 'DCA' | 'WAIT';
     allocationHint: 'one_time' | 'dca';
     volatilityLevel: 'LOW' | 'MED' | 'HIGH';
-    riskNote: string;
+    riskState: RiskState;
     suggestedEntryZone?: [number, number];
     weeksBelowMa240?: number;
   }

@@ -11,7 +11,8 @@ import {
   EtfScoreResult,
   ShortTermInvestmentPlan,
   LongTermInvestmentPlan,
-  EtfInvestmentPlan
+  EtfInvestmentPlan,
+  RiskState
 } from '../types';
 
 export type MarketRegime = 'BULL' | 'SIDEWAYS' | 'BEAR';
@@ -689,15 +690,15 @@ export const calculateLongTermInvestment = (
   const action = scoreResult?.action ?? calculateLongTermScore(stock).action;
   const atrRatio = stock.price > 0 && stock.atr > 0 ? stock.atr / stock.price : 0;
 
-  let riskNote: string;
+  let riskState: RiskState;
   if (atrRatio === 0) {
-    riskNote = '缺少 ATR 資料 | ATR data unavailable';
+    riskState = { level: 'UNKNOWN', key: 'NO_DATA' };
   } else if (atrRatio < 0.03) {
-    riskNote = '波動低：ATR 佔比 <3% | Low volatility: ATR-to-price <3%';
+    riskState = { level: 'LOW', key: 'LOW_VOL' };
   } else if (atrRatio <= 0.05) {
-    riskNote = '波動溫和：ATR 佔比 3-5% | Moderate volatility: ATR-to-price 3-5%';
+    riskState = { level: 'MEDIUM', key: 'MED_VOL' };
   } else {
-    riskNote = '波動偏高：ATR 佔比 >5% | Elevated volatility: ATR-to-price >5%';
+    riskState = { level: 'HIGH', key: 'HIGH_VOL' };
   }
 
   const suggestedEntryZone = stock.ma240 > 0
@@ -710,7 +711,7 @@ export const calculateLongTermInvestment = (
     mode: 'LONG_TERM',
     action,
     allocationHint,
-    riskNote,
+    riskState,
     suggestedEntryZone
   };
 };
@@ -728,15 +729,15 @@ export const calculateEtfInvestment = (
   else if (atrRatio < 0.02) volatilityLevel = 'LOW';
   else if (atrRatio >= 0.035) volatilityLevel = 'HIGH';
 
-  let riskNote: string;
+  let riskState: RiskState;
   if (atrRatio === 0) {
-    riskNote = '缺少 ATR 資料 | ATR data unavailable';
+    riskState = { level: 'UNKNOWN', key: 'NO_DATA' };
   } else if (atrRatio < 0.02) {
-    riskNote = '波動低：ATR 佔比 <2% | Low volatility: ATR-to-price <2%';
+    riskState = { level: 'LOW', key: 'LOW_VOL' };
   } else if (atrRatio < 0.035) {
-    riskNote = '波動適中：ATR 佔比 2-3.5% | Moderate volatility: ATR-to-price 2-3.5%';
+    riskState = { level: 'MEDIUM', key: 'MED_VOL' };
   } else {
-    riskNote = '波動偏高：ATR 佔比 >3.5% | Elevated volatility: ATR-to-price >3.5%';
+    riskState = { level: 'HIGH', key: 'HIGH_VOL' };
   }
 
   const suggestedEntryZone = stock.ma240 > 0
@@ -760,7 +761,7 @@ export const calculateEtfInvestment = (
     action,
     allocationHint,
     volatilityLevel,
-    riskNote,
+    riskState,
     suggestedEntryZone,
     weeksBelowMa240: weeksBelow === null ? undefined : weeksBelow
   };

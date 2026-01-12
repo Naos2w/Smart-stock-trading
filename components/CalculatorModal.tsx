@@ -12,7 +12,8 @@ import {
     ShortTermInvestmentPlan,
     LongTermInvestmentPlan,
     EtfInvestmentPlan,
-    StockTag
+    StockTag,
+    RiskState
 } from '../types';
 import {
     calculateSwingStrategies,
@@ -226,6 +227,54 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
           case 'MED':
           default:
               return t.med;
+      }
+  };
+
+  const getRiskNoteFromState = (riskState?: RiskState) => {
+      if (!riskState) return '';
+      if (riskState.key === 'NO_DATA') {
+          return lang === 'zh' ? '缺少 ATR 資料' : 'ATR data unavailable';
+      }
+      switch (riskState.level) {
+          case 'LOW':
+              return lang === 'zh' ? '波動低，風險相對溫和' : 'Low volatility, relatively mild risk.';
+          case 'MEDIUM':
+              return lang === 'zh' ? '波動中性，留意部位控制' : 'Medium volatility, watch position sizing.';
+          case 'HIGH':
+              return lang === 'zh' ? '波動偏高，需嚴格控管風險' : 'High volatility, strict risk control recommended.';
+          default:
+              return '';
+      }
+  };
+
+  const getRiskTagLabel = (riskState?: RiskState) => {
+      if (!riskState) return lang === 'zh' ? '—' : '—';
+      if (riskState.key === 'NO_DATA') {
+          return lang === 'zh' ? '無 ATR 資料' : 'No ATR data';
+      }
+      switch (riskState.level) {
+          case 'LOW':
+              return lang === 'zh' ? '低波動風險' : 'Low vol risk';
+          case 'MEDIUM':
+              return lang === 'zh' ? '中波動風險' : 'Medium vol risk';
+          case 'HIGH':
+              return lang === 'zh' ? '高波動風險' : 'High vol risk';
+          default:
+              return lang === 'zh' ? '—' : '—';
+      }
+  };
+
+  const getRiskBadgeClass = (riskState?: RiskState) => {
+      if (!riskState) return marketColors.neutralBadge;
+      switch (riskState.level) {
+          case 'LOW':
+              return marketColors.sentimentBull;
+          case 'HIGH':
+              return marketColors.sentimentBear;
+          case 'MEDIUM':
+          case 'UNKNOWN':
+          default:
+              return marketColors.neutralBadge;
       }
   };
 
@@ -501,10 +550,17 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
                                     </div>
                                 )}
                             </div>
-                            <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
-                                <strong className="mr-1 text-gray-500 dark:text-gray-400">{t.riskNoteLabel}:</strong>
-                                {nonSwingPlan!.riskNote}
-                            </div>
+                                <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
+                                    <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                                        {t.riskNoteLabel}
+                                    </span>
+                                    <span
+                                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-default ${getRiskBadgeClass(nonSwingPlan!.riskState)}`}
+                                        title={getRiskNoteFromState(nonSwingPlan!.riskState)}
+                                    >
+                                        {getRiskTagLabel(nonSwingPlan!.riskState)}
+                                    </span>
+                                </div>
                         </div>
                     </div>
 
