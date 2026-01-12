@@ -9,7 +9,7 @@ import LoginModal from './components/LoginModal';
 const DEFAULT_SYMBOLS = ['2330.TW', '2317.TW', 'NVDA', 'AAPL', 'TSLA'];
 
 type SortOption = 'SUITABILITY' | 'CHANGE_DESC' | 'PRICE_DESC';
-type MarketFilter = 'ALL' | 'TW' | 'US';
+type MarketFilter = 'ALL' | 'TW' | 'US' | 'ETF';
 
 // Tooltips kept hardcoded as requested (Shortened for mobile view though)
 const DASHBOARD_TOOLTIPS = {
@@ -303,6 +303,32 @@ export default function App() {
 
   const isFav = (symbol: string) => watchlistSymbols.includes(symbol);
 
+    const handleMarketFilterChange = (val: MarketFilter) => {
+      setMarketFilter(val);
+      if (val === 'ETF') {
+        setInvestmentMode('ETF');
+      } else if (investmentMode === 'ETF') {
+        setInvestmentMode('LONG_TERM');
+      }
+    };
+
+    const handleInvestmentModeChange = (mode: InvestmentMode) => {
+      if (marketFilter === 'ETF') {
+        if (mode !== 'ETF') return;
+        setInvestmentMode('ETF');
+        return;
+      }
+      if (mode === 'ETF') return;
+      setInvestmentMode(mode);
+    };
+
+    // const handleInvestmentModeChange = (mode: InvestmentMode) => {
+    //   if (mode === 'ETF' && selectedStock && selectedStock.assetType !== 'ETF') {
+    //     return;
+    //   }
+    //   setInvestmentMode(mode);
+    // };
+
   // UPDATED SORTING LOGIC: Use Score Engines
   const getSuitabilityScore = (stock: StockData): number => {
       if (investmentMode === 'SHORT_TERM') {
@@ -343,6 +369,7 @@ export default function App() {
       let list = [...watchlist];
       if (marketFilter === 'TW') list = list.filter(s => isTwSymbol(s.symbol));
       else if (marketFilter === 'US') list = list.filter(s => !isTwSymbol(s.symbol));
+      else if (marketFilter === 'ETF') list = list.filter(s => s.assetType === 'ETF');
 
       return list.sort((a, b) => {
           if (sortOption === 'SUITABILITY') return getSuitabilityScore(b) - getSuitabilityScore(a);
@@ -352,11 +379,11 @@ export default function App() {
       });
   }, [watchlist, sortOption, investmentMode, marketFilter]);
 
-  const renderStrategyGrid = (stock: StockData) => {
+  const renderStrategyGrid = (stock: StockData, mode: InvestmentMode) => {
     const marketColors = getMarketColors(stock.market);
     const cardClass = "bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl flex flex-col justify-center items-center text-center";
 
-    if (investmentMode === 'SHORT_TERM') {
+    if (mode === 'SHORT_TERM') {
       const maBull = stock.ma5 > stock.ma10 && stock.ma10 > stock.ma20;
       return (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -434,7 +461,12 @@ export default function App() {
         Icon = TrendDownIcon;
     }
 
-    const displayTags = generateTags(selectedStock, selectedStock.assetType, language, investmentMode);
+    const effectiveModeForSelected: InvestmentMode =
+      investmentMode === 'ETF' && selectedStock.assetType !== 'ETF'
+        ? 'LONG_TERM'
+        : investmentMode;
+
+    const displayTags = generateTags(selectedStock, selectedStock.assetType, language, effectiveModeForSelected);
 
     return (
       <div className="space-y-6 animate-fade-in pb-20">
@@ -488,7 +520,7 @@ export default function App() {
                     {isOpen ? t.marketOpen : t.marketClosed}
                 </span>
              </div>
-             {renderStrategyGrid(selectedStock)}
+             {renderStrategyGrid(selectedStock, effectiveModeForSelected)}
 
              <div className="flex flex-wrap gap-2 mt-2">
               {displayTags.map((tag, i) => (
@@ -621,13 +653,14 @@ export default function App() {
          <div className="flex flex-col md:flex-row justify-between items-center mb-4 px-2 gap-3">
             <div className="w-full md:w-[200px]">
                 <SegmentedControl 
-                    value={marketFilter}
-                    onChange={(val) => setMarketFilter(val as MarketFilter)}
-                    options={[
-                        { value: 'ALL', label: 'All' },
-                        { value: 'TW', label: 'TW' },
-                        { value: 'US', label: 'US' },
-                    ]}
+                value={marketFilter}
+                onChange={(val) => handleMarketFilterChange(val as MarketFilter)}
+                options={[
+                  { value: 'ALL', label: 'All' },
+                  { value: 'TW', label: 'TW' },
+                  { value: 'US', label: 'US' },
+                  { value: 'ETF', label: 'ETF' },
+                ]}
                 />
             </div>
 
@@ -723,13 +756,18 @@ export default function App() {
             </div>
             <div className="w-full md:w-auto min-w-[200px]">
                 <SegmentedControl 
-                    value={investmentMode}
-                    onChange={setInvestmentMode}
-                    options={[
-                        { value: 'SHORT_TERM', label: t.shortTerm },
-                        { value: 'LONG_TERM', label: t.longTerm },
-                        { value: 'ETF', label: t.modeEtf },
-                    ]}
+                value={investmentMode}
+                onChange={(val) => handleInvestmentModeChange(val as InvestmentMode)}
+                options={
+                  marketFilter === 'ETF'
+                    ? [
+                      { value: 'ETF', label: t.modeEtf },
+                      ]
+                    : [
+                      { value: 'SHORT_TERM', label: t.shortTerm },
+                      { value: 'LONG_TERM', label: t.longTerm },
+                      ]
+                }
                  />
             </div>
         </div>
@@ -761,7 +799,7 @@ export default function App() {
           isOpen={isCalculatorOpen} 
           onClose={() => setIsCalculatorOpen(false)} 
           stock={selectedStock}
-          mode={investmentMode}
+          mode={investmentMode === 'ETF' && selectedStock.assetType !== 'ETF' ? 'LONG_TERM' : investmentMode}
           lang={language}
         />
       )}
