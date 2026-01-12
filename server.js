@@ -1,8 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import YahooFinance from 'yahoo-finance2'; 
+import dotenv from 'dotenv'; 
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const yahooFinance = new YahooFinance({});
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '.env.local') });
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const app = express();
 const PORT = 3001;
 
@@ -17,7 +23,7 @@ const FINNHUB_KEY = process.env.FINNHUB_API_KEY;
 const FINMIND_KEY = process.env.FINMIND_API_KEY;
 
 app.get('/', (req, res) => {
-  res.send('Smart Stock Trading Backend is Running! (v4.1 Multi-Source Fixed)');
+  res.send('Smart Stock Trading Backend is Running! (v4.2 with Swing Engine Support)');
 });
 
 app.get('/health', (req, res) => {
@@ -301,6 +307,9 @@ app.get('/api/stock/:symbol', async (req, res) => {
     const ma5 = calculateSMA(validHistory, 5);
     const ma10 = calculateSMA(validHistory, 10);
     const ma20 = calculateSMA(validHistory, 20);
+    // NEW: Calculate Previous MA20 for Slope
+    const ma20Prev = calculateSMA(validHistory.slice(0, -1), 20);
+
     const ma60 = calculateSMA(validHistory, 60);
     const ma120 = calculateSMA(validHistory, 120);
     const ma240 = calculateSMA(validHistory, 240);
@@ -352,7 +361,7 @@ app.get('/api/stock/:symbol', async (req, res) => {
       institutionalOwnership: 0, 
       
       // Technicals
-      ma5, ma10, ma20, ma60, ma120, ma240,
+      ma5, ma10, ma20, ma20Prev, ma60, ma120, ma240,
       rsi, rsiPrev,
       atr,
       kValue: k, dValue: d,

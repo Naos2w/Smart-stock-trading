@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { StockRaw, StockData, InvestmentMode, StockTag, AppLanguage, TRANSLATIONS, UserProfile, getMarketColors } from './types';
 import { fetchStockData, searchStocks, checkBackendHealth } from './services/stockService';
-import { getGeminiInsight } from './services/geminiService';
 import { SearchIcon, MoonIcon, SunIcon, HeartIcon, RefreshIcon, CalculatorIcon, TrendUpIcon, TrendDownIcon, SortIcon, PlayIcon, PauseIcon } from './components/Icons';
 import CalculatorModal from './components/CalculatorModal';
 import StrategyGuide from './components/StrategyGuide';
@@ -35,47 +34,10 @@ const DASHBOARD_TOOLTIPS = {
   }
 };
 
-// Simple Markdown Parser
-const SimpleMarkdown = ({ content }: { content: string }) => {
-  if (!content) return null;
-  return (
-    <div className="space-y-1 text-sm leading-relaxed text-gray-800 dark:text-gray-200">
-      {content.split('\n').map((line, i) => {
-        const trimmed = line.trim();
-        if (!trimmed) return <div key={i} className="h-2" />;
-        
-        // Bold parsing: **text**
-        const parts = line.split(/(\*\*.*?\*\*)/g);
-        const renderParts = parts.map((part, idx) => {
-            if (part.startsWith('**') && part.endsWith('**')) {
-                return <strong key={idx} className="font-semibold text-black dark:text-white">{part.slice(2, -2)}</strong>;
-            }
-            return part;
-        });
-
-        // List item detection
-        if (trimmed.startsWith('- ') || trimmed.startsWith('• ')) {
-           return <div key={i} className="pl-4 flex"><span className="mr-2 opacity-70">•</span><span>{renderParts}</span></div>;
-        }
-        
-        // Highlight numbered headers like "1. Analysis"
-        if (/^\d+\.\s/.test(trimmed)) {
-           return <div key={i} className="font-bold mt-2 mb-1 text-base text-primary">{renderParts}</div>;
-        }
-
-        return <div key={i}>{renderParts}</div>;
-      })}
-    </div>
-  );
-};
-
 const StockTagBadge: React.FC<{ tag: StockTag, market: string }> = ({ tag, market }) => {
   const colors = getMarketColors(market);
   let className = colors.neutralBadge;
   
-  // Align TAG colors strictly with Market Sentiment Colors:
-  // TW: Positive -> Bullish (Red), Negative -> Bearish (Green)
-  // US: Positive -> Bullish (Green), Negative -> Bearish (Red)
   if (tag.type === 'POSITIVE') className = colors.sentimentBull;
   if (tag.type === 'NEGATIVE') className = colors.sentimentBear;
 
@@ -125,12 +87,6 @@ const getMarketStatus = () => {
     const isTwOpen = !isWeekend && totalMinutes >= 540 && totalMinutes <= 810;
 
     // 2. Check US Stock
-    // User Provided Logic:
-    // Summer (DST): 21:30 (1290) - 04:00 (240 next day)
-    // Winter: 22:30 (1350) - 05:00 (300 next day)
-    
-    // Basic DST Check (Approximate)
-    // March 10 ~ Nov 3 approx.
     const month = now.getMonth() + 1;
     const isSummer = month > 3 && month < 11; 
     
@@ -180,8 +136,6 @@ export default function App() {
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
   
   const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
-  const [aiInsight, setAiInsight] = useState<string>('');
-  const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPaused, setIsPaused] = useState(false); 
   const [backendStatus, setBackendStatus] = useState<boolean>(false);
@@ -232,7 +186,6 @@ export default function App() {
 
   // Initial Data Load
   useEffect(() => {
-    // Initial load always runs fully regardless of market hours
     loadWatchlistData(false, false);
   }, [language, backendStatus, watchlistSymbols]); 
 
@@ -244,31 +197,20 @@ export default function App() {
 
         if (activeTab === 'WATCHLIST') {
             const { isTwOpen, isUsOpen } = getMarketStatus();
-            
-            // If neither market is open, don't auto-refresh at all
             if (!isTwOpen && !isUsOpen) return;
-
-            // Trigger auto refresh, strictly fetching only open market symbols
             loadWatchlistData(true, true); 
         } 
-        
         else if (activeTab === 'SEARCH' && selectedStock) {
             const isTw = isTwSymbol(selectedStock.symbol);
             const { isTwOpen, isUsOpen } = getMarketStatus();
-            
             if (isTw && isTwOpen) refreshSingleStock(selectedStock.symbol);
             if (!isTw && isUsOpen) refreshSingleStock(selectedStock.symbol);
         }
-
     }, 2000); 
 
     return () => clearInterval(intervalId);
   }, [activeTab, selectedStock, language, watchlistSymbols, isPaused]);
 
-
-  // Optimized Data Loader
-  // isBackground: No loading spinner
-  // onlyOpenMarkets: If true, filters symbols based on current time. If false, fetches all.
   const loadWatchlistData = async (isBackground = false, onlyOpenMarkets = false) => {
     if (!backendStatus) return;
     if (isFetchingRef.current) return;
@@ -280,20 +222,15 @@ export default function App() {
         const uniqueSymbols = Array.from(new Set(watchlistSymbols)) as string[];
         const { isTwOpen, isUsOpen } = getMarketStatus();
 
-        // FILTER LOGIC:
-        // If onlyOpenMarkets is true (Auto-Refresh), we strictly filter.
-        // If onlyOpenMarkets is false (Manual Refresh / Init), we fetch all.
         const symbolsToFetch = uniqueSymbols.filter(sym => {
             if (!onlyOpenMarkets) return true;
-
             const isTw = isTwSymbol(sym);
             if (isTw && isTwOpen) return true;
-            if (!isTw && isUsOpen) return true; // Assuming non-TW is US/Global
+            if (!isTw && isUsOpen) return true; 
             return false;
         });
 
         if (symbolsToFetch.length === 0) {
-            // Nothing to fetch right now
             isFetchingRef.current = false;
             if (!isBackground) setIsRefreshing(false);
             return;
@@ -303,14 +240,11 @@ export default function App() {
         const results = await Promise.all(promises);
         const validResults = results.filter((s): s is StockData => s !== null);
         
-        // MERGE LOGIC:
-        // Update existing watchlist items with new data, keep old items if not fetched
         setWatchlist(prev => {
             const symbolMap = new Map(prev.map(item => [item.symbol, item]));
             validResults.forEach(newItem => {
                 symbolMap.set(newItem.symbol, newItem);
             });
-            // Convert map back to array, preserving generic order (or we can rely on sort later)
             return Array.from(symbolMap.values());
         });
 
@@ -334,16 +268,6 @@ export default function App() {
           isFetchingRef.current = false;
       }
   }
-
-  useEffect(() => {
-    if (selectedStock) {
-      setIsLoadingAi(true);
-      setAiInsight('');
-      getGeminiInsight(selectedStock, investmentMode, language)
-        .then(setAiInsight)
-        .finally(() => setIsLoadingAi(false));
-    }
-  }, [selectedStock?.symbol, investmentMode, language]); 
 
   const handleSelectStock = async (raw: StockRaw | string) => {
     setStockLoading(true);
@@ -405,14 +329,13 @@ export default function App() {
 
   const getStatusLabel = (score: number, market: string) => {
       const colors = getMarketColors(market);
-      // Align Status Label colors with Market Sentiment
       if (score >= 3) return { 
           text: investmentMode === 'SHORT_TERM' ? 'Buy Setup' : 'Value Buy', 
-          className: colors.sentimentBull // Positive -> Bullish Color
+          className: colors.sentimentBull 
       };
       if (score <= -2) return { 
           text: 'Risk / Sell', 
-          className: colors.sentimentBear // Negative -> Bearish Color
+          className: colors.sentimentBear 
       };
       return { 
           text: 'Neutral', 
@@ -422,13 +345,8 @@ export default function App() {
 
   const sortedAndFilteredWatchlist = useMemo(() => {
       let list = [...watchlist];
-      
-      // Market Filter
-      if (marketFilter === 'TW') {
-          list = list.filter(s => isTwSymbol(s.symbol));
-      } else if (marketFilter === 'US') {
-          list = list.filter(s => !isTwSymbol(s.symbol));
-      }
+      if (marketFilter === 'TW') list = list.filter(s => isTwSymbol(s.symbol));
+      else if (marketFilter === 'US') list = list.filter(s => !isTwSymbol(s.symbol));
 
       return list.sort((a, b) => {
           if (sortOption === 'SUITABILITY') return getSuitabilityScore(b) - getSuitabilityScore(a);
@@ -439,7 +357,7 @@ export default function App() {
   }, [watchlist, sortOption, investmentMode, marketFilter]);
 
   const renderStrategyGrid = (stock: StockData) => {
-    const marketColors = getMarketColors(stock.symbol);
+    const marketColors = getMarketColors(stock.market);
     const cardClass = "bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl flex flex-col justify-center items-center text-center";
 
     if (investmentMode === 'SHORT_TERM') {
@@ -504,13 +422,11 @@ export default function App() {
         </div>
       );
 
-    const colors = getMarketColors(selectedStock.symbol);
-    // Use precise logic here too
+    const colors = getMarketColors(selectedStock.market);
     const { isTwOpen, isUsOpen } = getMarketStatus();
     const isTwStock = isTwSymbol(selectedStock.symbol);
     const isOpen = isTwStock ? isTwOpen : isUsOpen;
 
-    // COLOR LOGIC: Handle 0 change
     let mainColor = colors.neutralText;
     let Icon = null;
     
@@ -539,7 +455,6 @@ export default function App() {
                 <span className={`text-5xl font-bold tracking-tighter ${mainColor}`}>
                   {selectedStock.price}
                 </span>
-                {/* Horizontal Alignment for Change & Percent */}
                 <div className={`flex items-center gap-2 text-xl font-medium ${mainColor}`}>
                    {Icon && <Icon className="w-6 h-6" />}
                    <span>{selectedStock.change > 0 ? '+' : ''}{selectedStock.change}</span>
@@ -547,7 +462,6 @@ export default function App() {
                 </div>
               </div>
               
-               {/* Time Info */}
                <div className="flex items-center gap-2 mt-2 text-xs text-gray-400">
                     <span>{t.lastUpdate}: {formatTime(selectedStock.lastTradeTime)}</span>
                     {selectedStock.isDelayed && (
@@ -564,7 +478,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Strategy Banner - Updated Long Term Color to Blue */}
+        {/* Strategy Banner */}
         <div className={`px-4 py-3 rounded-2xl flex items-center justify-between ${investmentMode === 'SHORT_TERM' ? 'bg-orange-50 dark:bg-orange-900/20' : 'bg-blue-50 dark:bg-blue-900/20'}`}>
             <div className="flex items-center gap-3">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center ${investmentMode === 'SHORT_TERM' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}>
@@ -595,32 +509,10 @@ export default function App() {
 
              <div className="flex flex-wrap gap-2 mt-2">
               {selectedStock.tags.map((tag, i) => (
-                <StockTagBadge key={i} tag={tag} market={selectedStock.symbol} />
+                <StockTagBadge key={i} tag={tag} market={selectedStock.market} />
               ))}
               {selectedStock.tags.length === 0 && <span className="text-gray-400 text-xs italic">{t.noSignals}</span>}
             </div>
-        </div>
-
-        {/* AI Insight */}
-        <div className="bg-white/60 dark:bg-white/5 backdrop-blur-md p-6 rounded-3xl border border-white/20 dark:border-white/10 shadow-sm">
-           <div className="flex items-center gap-2 mb-3">
-             <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-             <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
-               Gemini AI
-             </h3>
-           </div>
-           
-           <div className="mt-2 pl-2 border-l-2 border-blue-500/30">
-             {isLoadingAi ? (
-                <div className="flex items-center gap-2 text-gray-500 text-sm">
-                   <div className="w-1 h-1 rounded-full bg-gray-400 animate-bounce"></div>
-                   <div className="w-1 h-1 rounded-full bg-gray-400 animate-bounce delay-75"></div>
-                   <div className="w-1 h-1 rounded-full bg-gray-400 animate-bounce delay-150"></div>
-                </div>
-             ) : (
-                <SimpleMarkdown content={aiInsight} />
-             )}
-           </div>
         </div>
         
         {/* Calculator Button */}
@@ -638,6 +530,7 @@ export default function App() {
   };
 
   const renderStockList = (stocks: StockData[], title: string) => {
+      // (Implementation same as before, no changes to list rendering)
       if (stocks.length === 0) return (
           <div className="flex flex-col items-center justify-center py-12 text-gray-400">
              <p className="text-sm font-medium opacity-60">No stocks found in this market filter.</p>
@@ -652,11 +545,10 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {stocks.map(stock => {
                     const score = getSuitabilityScore(stock);
-                    const styleClass = getCardStyle(score, stock.symbol);
-                    const status = getStatusLabel(score, stock.symbol);
-                    const colors = getMarketColors(stock.symbol);
+                    const styleClass = getCardStyle(score, stock.market);
+                    const status = getStatusLabel(score, stock.market);
+                    const colors = getMarketColors(stock.market);
                     
-                    // COLOR LOGIC: Handle 0 change
                     let priceColor = colors.neutralText;
                     let badgeColor = colors.neutralBg;
                     if (stock.change > 0) {
@@ -707,10 +599,9 @@ export default function App() {
                             <div className="mt-2 flex justify-between items-end">
                                 <div className="flex gap-1 flex-wrap">
                                     {stock.tags.slice(0, 2).map((t, i) => (
-                                        <StockTagBadge key={i} tag={t} market={stock.symbol} />
+                                        <StockTagBadge key={i} tag={t} market={stock.market} />
                                     ))}
                                 </div>
-                                {/* Updated Status Label using Badge Style */}
                                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${status.className}`}>
                                     {status.text}
                                 </span>
@@ -739,8 +630,6 @@ export default function App() {
     return (
       <div className="animate-fade-in pb-20">
          <div className="flex justify-between items-center mb-4 px-2">
-            
-            {/* Market Filter */}
             <div className="w-[180px]">
                 <SegmentedControl 
                     value={marketFilter}
@@ -770,7 +659,6 @@ export default function App() {
 
   return (
     <div className={`min-h-screen ${darkMode ? 'dark' : ''} font-sans`}>
-      {/* iOS style Blur Header */}
       <header className="sticky top-0 z-30 bg-light-bg/80 dark:bg-dark-bg/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-gray-800/50">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -805,7 +693,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3">
-             {/* Fix 3: Restore Language Toggle */}
             <button 
                 onClick={() => setLanguage(prev => prev === 'zh' ? 'en' : 'zh')}
                 className="px-2 py-1 text-[10px] font-bold bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition"
@@ -834,7 +721,6 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6">
-        {/* Top Controls - Fix 2: Added more vertical margin (my-8) and gap */}
         <div className="flex flex-col md:flex-row justify-between items-center my-8 gap-6">
             <div className="w-full md:w-auto min-w-[200px]">
                  <SegmentedControl 
@@ -863,7 +749,6 @@ export default function App() {
 
       {/* Floating Refresh Controls */}
       <div className="fixed bottom-6 right-6 z-40 flex flex-col gap-3 items-center">
-         {/* Secondary: Manual Refresh (Small) -> Force Fetch All */}
          <div 
             onClick={() => loadWatchlistData(false, false)} 
             title="Refresh All (Manual)"
@@ -872,7 +757,6 @@ export default function App() {
             <RefreshIcon className="w-5 h-5" />
          </div>
 
-         {/* Primary: Play/Pause (Resized to match Refresh) */}
          <div 
             onClick={() => setIsPaused(!isPaused)} 
             title={isPaused ? "Resume Auto-Refresh" : "Pause Auto-Refresh"}
@@ -882,7 +766,6 @@ export default function App() {
          </div>
       </div>
 
-      {/* Modals */}
       {selectedStock && (
         <CalculatorModal 
           isOpen={isCalculatorOpen} 

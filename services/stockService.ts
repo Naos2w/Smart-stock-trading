@@ -1,4 +1,4 @@
-import { StockData, StockRaw, StockTag, AppLanguage, CalculatorResult } from '../types';
+import { StockData, StockRaw, StockTag, AppLanguage, CalculatorResult, StrategyResult, SwingScoreResult } from '../types';
 
 export const checkBackendHealth = async (): Promise<boolean> => {
   try {
@@ -28,13 +28,14 @@ export const fetchStockData = async (symbol: string, lang: AppLanguage): Promise
     if (!response.ok) throw new Error(`Server returned ${response.status}`);
     const realData = await response.json();
 
+    // Re-generate tags here to ensure language consistency
     return {
       ...realData,
       symbol: realData.symbol,
-      tags: generateAdvancedTags(realData, lang),
+      tags: generateSwingTags(realData, lang), 
       updatedAt: Date.now(),
-      lastTradeTime: realData.lastTradeTime, // Pass through from backend
-      isDelayed: realData.isDelayed,         // Pass through from backend
+      lastTradeTime: realData.lastTradeTime, 
+      isDelayed: realData.isDelayed,         
     };
   } catch (error) {
     console.error(`[StockService] ❌ Failed to fetch ${symbol}.`, error);
@@ -42,122 +43,208 @@ export const fetchStockData = async (symbol: string, lang: AppLanguage): Promise
   }
 };
 
-// --- ADVANCED TAG GENERATION LOGIC (Based on User Checklist) ---
-const generateAdvancedTags = (data: StockData, lang: AppLanguage): StockTag[] => {
+// --- SWING TRADING TAGS (with Score Impacts) ---
+const generateSwingTags = (data: StockData, lang: AppLanguage): StockTag[] => {
     const tags: StockTag[] = [];
     const t = lang === 'zh' ? TAGS_ZH : TAGS_EN;
     const { 
-        price, volume, vol5, avgVolume, 
-        ma5, ma10, ma20, ma60, ma120, ma240, 
-        rsi, macdHist, atr,
-        roe, revenueYoy, institutionalOwnership
+        price, vol5, vol20,
+        ma20, ma60, ma240, 
+        rsi
     } = data;
 
-    // --- Short Term & Swing Strategy ---
-    
-    // 1. Structure (Price vs MA20)
+    // 1. Trend Persistence
+    // STRONG_POS: MA20 > MA60
+    if (ma20 > ma60) {
+       tags.push({ label: t.trendBull, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descTrendBull, scoreImpact: 5 });
+    }
+    // POS: Price > MA20
     if (price > ma20) {
-       tags.push({ label: t.aboveMa20, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descAboveMa20 });
+       tags.push({ label: t.aboveMa20, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descAboveMa20, scoreImpact: 3 });
     } else {
-       tags.push({ label: t.belowMa20, type: 'NEGATIVE', category: 'TECHNICAL', desc: t.descBelowMa20 });
+       tags.push({ label: t.belowMa20, type: 'NEGATIVE', category: 'TECHNICAL', desc: t.descBelowMa20, scoreImpact: -3 });
     }
 
-    // 2. Trend (MA Slope Alignment)
-    // Multiverse: 5 > 10 > 20
-    if (ma5 > ma10 && ma10 > ma20) {
-        tags.push({ label: t.maBull, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descMaBull });
+    // 2. RSI Zone
+    if (rsi >= 45 && rsi <= 65) {
+        tags.push({ label: t.rsiSweet, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descRsiSweet, scoreImpact: 3 });
+    } else if (rsi < 40) {
+        tags.push({ label: t.rsiWeak, type: 'NEGATIVE', category: 'RISK', desc: t.descRsiWeak, scoreImpact: -3 });
+    } else if (rsi > 75) {
+        tags.push({ label: t.rsiHot, type: 'NEUTRAL', category: 'RISK', desc: t.descRsiHot, scoreImpact: -3 });
     }
 
     // 3. Volume
-    // Breakout Volume: Current Volume > VOL5
-    if (volume > vol5) {
-        tags.push({ label: t.volStrong, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descVolStrong });
-    }
-    // No volume
-    if (volume < avgVolume * 0.6) {
-        tags.push({ label: t.volWeak, type: 'NEUTRAL', category: 'TECHNICAL', desc: t.descVolWeak });
+    if (vol5 >= vol20) {
+        tags.push({ label: t.volStable, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descVolStable, scoreImpact: 3 });
+    } else if (vol5 < vol20 * 0.7) {
+        tags.push({ label: t.volDry, type: 'NEGATIVE', category: 'RISK', desc: t.descVolDry, scoreImpact: -3 });
     }
 
-    // 4. Momentum (RSI)
-    if (rsi > 50) tags.push({ label: t.rsiBull, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descRsiBull });
-    if (rsi > 75) tags.push({ label: t.rsiOver, type: 'NEGATIVE', category: 'RISK', desc: t.descRsiOver });
-    if (rsi < 30) tags.push({ label: t.rsiUnder, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descRsiUnder });
-
-    // --- Long Term Strategy ---
-    
-    // 1. Life Line (MA240)
-    if (price > ma240) {
-        tags.push({ label: t.trendLongBull, type: 'POSITIVE', category: 'TECHNICAL', desc: t.descTrendLongBull });
-    } else {
-        tags.push({ label: t.trendLongBear, type: 'NEGATIVE', category: 'RISK', desc: t.descTrendLongBear });
-    }
-
-    // 2. Fundamentals
-    if (roe > 15) tags.push({ label: t.highRoe, type: 'POSITIVE', category: 'FUNDAMENTAL', desc: t.descHighRoe });
-    if (revenueYoy > 0) tags.push({ label: t.revGrowth, type: 'POSITIVE', category: 'FUNDAMENTAL', desc: t.descRevGrowth });
-    
-    // 3. Chips
-    if (institutionalOwnership > 40) tags.push({ label: t.instHeavy, type: 'POSITIVE', category: 'CHIPS', desc: t.descInstHeavy });
+    // 4. Long Term
+    if (price > ma240) tags.push({ label: t.ma240Bull, type: 'POSITIVE', category: 'TECHNICAL', scoreImpact: 3 });
 
     return tags;
 };
 
+// --- SWING SCORING ENGINE (Precise Implementation) ---
+export const calculateSwingScore = (stock: StockData): SwingScoreResult => {
+    let trendScore = 0;
+    let momentumScore = 0;
+    let volumeScore = 0;
+    let riskScore = 25; // Base score, subtract for risks
+
+    const { price, ma20, ma20Prev, ma60, rsi, vol5, vol20, atr } = stock;
+
+    // 1. Trend Score (0–30)
+    if (price > ma20) trendScore += 10;
+    if (ma20 > ma60) trendScore += 10;
+    // Use precise previous slope if available, otherwise proxy
+    if (ma20Prev && ma20 > ma20Prev) trendScore += 10;
+    else if (!ma20Prev && stock.ma5 > ma20) trendScore += 10; // Proxy fallback
+
+    // 2. Momentum Score (0–25)
+    if (rsi >= 45 && rsi <= 65) momentumScore += 15;
+    else if (rsi >= 40 && rsi < 45) momentumScore += 8;
+    else if (rsi > 70) momentumScore -= 5;
+    
+    // Price strength relative to ATR band
+    if (price > ma20 + (atr * 0.3)) momentumScore += 10;
+
+    // 3. Volume Score (0–20)
+    if (vol5 >= vol20) volumeScore += 10;
+    if (vol5 >= vol20 * 1.2) volumeScore += 5;
+    if (vol5 < vol20 * 0.7) volumeScore -= 5;
+
+    // 4. Risk Score (start from 25)
+    if (rsi > 75) riskScore -= 5;
+    if (atr > 0 && (atr / price) > 0.05) riskScore -= 5;
+    if (price < ma20) riskScore -= 10; 
+
+    // 5. Tag Score (Capped at +/- 15)
+    let tagScore = 0;
+    stock.tags.forEach(t => tagScore += (t.scoreImpact || 0));
+    tagScore = Math.max(-15, Math.min(15, tagScore));
+
+    const totalScore = Math.max(0, Math.min(100, trendScore + momentumScore + volumeScore + riskScore + tagScore));
+
+    let action: 'ENTER' | 'WATCH' | 'AVOID' = 'AVOID';
+    if (totalScore >= 85) action = 'ENTER';
+    else if (totalScore >= 70) action = 'WATCH';
+
+    return {
+        totalScore,
+        action,
+        details: { trend: trendScore, momentum: momentumScore, volume: volumeScore, risk: riskScore }
+    };
+};
+
+// --- SWING STRATEGY CALCULATION (Unchanged logic, just keeping file complete) ---
+export const calculateSwingStrategies = (stock: StockData): StrategyResult[] => {
+    const strategies: StrategyResult[] = [];
+    const { ma20, ma60, atr, price } = stock;
+    
+    // Strategy 1: MA20 Pullback
+    const m1_entryLow = ma20 * 0.995;
+    const m1_entryHigh = ma20 * 1.01;
+    const m1_stop = ma20 - (0.8 * atr); 
+    const m1_target = ma20 + (2.5 * atr);
+    
+    const m1_cond = price >= m1_entryLow * 0.99 && price <= m1_entryHigh * 1.01 && ma20 > ma60;
+
+    strategies.push({
+        id: 'MA20',
+        name: 'MA20 回測波段',
+        desc: '趨勢核心：等待股價回測 MA20 附近 (±1%)，ATR 防守。',
+        entryPrice: parseFloat(m1_entryLow.toFixed(2)),
+        entryPriceHigh: parseFloat(m1_entryHigh.toFixed(2)),
+        stopLoss: parseFloat(m1_stop.toFixed(2)),
+        targetPrice: parseFloat(m1_target.toFixed(2)),
+        riskRewardRatio: 2.5,
+        conditionMet: m1_cond,
+        note: m1_cond ? '價格位於回測甜蜜區' : '等待回測 MA20'
+    });
+
+    // Strategy 2: ATR Volatility
+    const m2_limit = ma20 + (1.5 * atr);
+    const m2_entry = Math.min(price, m2_limit);
+    const m2_stop = m2_entry - (1.5 * atr);
+    const m2_target = m2_entry + (3 * atr);
+    
+    strategies.push({
+        id: 'ATR',
+        name: 'ATR 波動量化',
+        desc: '量化佈局：以 1.5 倍 ATR 為停損，抓 3 倍 ATR 獲利。',
+        entryPrice: parseFloat(m2_entry.toFixed(2)),
+        stopLoss: parseFloat(m2_stop.toFixed(2)),
+        targetPrice: parseFloat(m2_target.toFixed(2)),
+        riskRewardRatio: 2.0,
+        conditionMet: atr > 0, 
+        note: '依據波動率動態設定'
+    });
+
+    // Strategy 3: Structural Support
+    const structuralSupport = Math.max(ma60, ma20 * 0.95);
+    const m3_entry = structuralSupport * 1.01;
+    const m3_stop = structuralSupport - (1.0 * atr);
+    const m3_target = m3_entry + (2.5 * atr);
+    
+    const m3_cond = price >= structuralSupport && price <= structuralSupport * 1.03;
+
+    strategies.push({
+        id: 'STRUCT',
+        name: '結構支撐 (MA60)',
+        desc: '波段低接：以季線 (MA60) 或結構支撐為防守點。',
+        entryPrice: parseFloat(m3_entry.toFixed(2)),
+        stopLoss: parseFloat(m3_stop.toFixed(2)),
+        targetPrice: parseFloat(m3_target.toFixed(2)),
+        riskRewardRatio: 2.5,
+        conditionMet: m3_cond,
+        note: m3_cond ? '接近結構支撐區' : '距離支撐仍有空間'
+    });
+
+    return strategies;
+}
+
+
 const TAGS_ZH = {
-    aboveMa20: '站上月線 (MA20)',
-    descAboveMa20: '股價在 20 日均線之上，短線趨勢偏多',
-    belowMa20: '跌破月線 (弱)',
-    descBelowMa20: '股價在 20 日均線之下，短線趨勢偏空',
-    maBull: '均線多頭',
-    descMaBull: 'MA5 > MA10 > MA20，均線呈現多頭排列，上漲動能強',
-    volStrong: '成交量 > 5日均量',
-    descVolStrong: '今日成交量大於過去 5 日平均，有量能支持',
-    volWeak: '量縮',
-    descVolWeak: '成交量萎縮，市場觀望或整理中',
-    rsiBull: 'RSI > 50 (強)',
-    descRsiBull: '相對強弱指標大於 50，買方力道較強',
-    rsiOver: 'RSI 過熱',
-    descRsiOver: 'RSI > 75，短線可能過熱，留意回檔風險',
-    rsiUnder: 'RSI 超跌',
-    descRsiUnder: 'RSI < 30，短線乖離過大，可能反彈',
-    trendLongBull: '年線 (MA240) 之上',
-    descTrendLongBull: '股價在年線之上，長期趨勢看好',
-    trendLongBear: '年線 (MA240) 之下',
-    descTrendLongBear: '股價在年線之下，長期趨勢偏空',
-    highRoe: '高 ROE (>15%)',
-    descHighRoe: '股東權益報酬率高，公司運用資金效率佳',
-    revGrowth: '營收成長',
-    descRevGrowth: '營收年增率為正，基本面有成長動力',
-    instHeavy: '法人持股高',
-    descInstHeavy: '法人持股 > 40%，籌碼相對穩定'
+    trendBull: '多頭排列 (MA20>60)',
+    descTrendBull: '中短期均線呈現多頭排列，波段結構健康',
+    aboveMa20: '站上月線',
+    descAboveMa20: '股價在 20 日均線之上，短線強勢',
+    belowMa20: '跌破月線',
+    descBelowMa20: '股價在 20 日均線之下，短線轉弱',
+    rsiSweet: 'RSI 甜蜜區 (45-65)',
+    descRsiSweet: 'RSI 位於波段最佳攻擊區間，動能充沛且未過熱',
+    rsiWeak: 'RSI 轉弱 (<40)',
+    descRsiWeak: 'RSI 跌破 40，波段動能可能失速',
+    rsiHot: 'RSI 過熱 (>75)',
+    descRsiHot: 'RSI 過高，隨時可能震盪整理',
+    volStable: '量能穩定',
+    descVolStable: '成交量大於 20 日均量，推升力道足夠',
+    volDry: '量能退潮',
+    descVolDry: '成交量明顯萎縮，波段可能進入整理',
+    ma240Bull: '年線之上',
 };
 
 const TAGS_EN = {
+    trendBull: 'Trend Bull (20>60)',
+    descTrendBull: 'MA20 > MA60. Healthy swing structure.',
     aboveMa20: 'Above MA20',
-    descAboveMa20: 'Price is above the 20-day moving average, bullish signal.',
+    descAboveMa20: 'Price > MA20. Short term strength.',
     belowMa20: 'Below MA20',
-    descBelowMa20: 'Price is below the 20-day moving average, bearish signal.',
-    maBull: 'MA Bullish',
-    descMaBull: 'MA5 > MA10 > MA20. Moving averages aligned for uptrend.',
-    volStrong: 'Vol > Vol5',
-    descVolStrong: 'Current volume exceeds 5-day average, confirming momentum.',
-    volWeak: 'Low Vol',
-    descVolWeak: 'Volume is low, indicating consolidation or lack of interest.',
-    rsiBull: 'RSI > 50',
-    descRsiBull: 'RSI above 50 indicates bullish momentum.',
-    rsiOver: 'RSI Overbought',
-    descRsiOver: 'RSI > 75. Price might be overextended.',
-    rsiUnder: 'RSI Oversold',
-    descRsiUnder: 'RSI < 30. Price might be oversold.',
-    trendLongBull: 'Above MA240',
-    descTrendLongBull: 'Price above 240-day average. Long-term trend is up.',
-    trendLongBear: 'Below MA240',
-    descTrendLongBear: 'Price below 240-day average. Long-term trend is down.',
-    highRoe: 'High ROE',
-    descHighRoe: 'Return on Equity > 15%. Efficient capital use.',
-    revGrowth: 'Rev Growth',
-    descRevGrowth: 'Revenue is growing year-over-year.',
-    instHeavy: 'High Inst. Own',
-    descInstHeavy: 'Institutional ownership > 40%.'
+    descBelowMa20: 'Price < MA20. Weakness.',
+    rsiSweet: 'RSI Sweet Spot',
+    descRsiSweet: 'RSI 45-65. Best zone for swing trades.',
+    rsiWeak: 'RSI Weak (<40)',
+    descRsiWeak: 'Momentum failing.',
+    rsiHot: 'RSI Hot (>75)',
+    descRsiHot: 'Extended. Expect chop.',
+    volStable: 'Vol Stable',
+    descVolStable: 'Vol > Vol20. Good participation.',
+    volDry: 'Vol Drying',
+    descVolDry: 'Low volume. Interest fading.',
+    ma240Bull: 'Above MA240',
 };
 
 export const calculateInvestment = (
@@ -168,9 +255,6 @@ export const calculateInvestment = (
   const isTW = stockData.market.includes('Tai') || stockData.currency === 'TWD';
   const exchangeRate = isTW ? 1 : 32.5; 
   
-  // Stop Loss Logic
-  // Short Term: 1.5 * ATR (Volatility based)
-  // Long Term: 10% Trailing or Support based (Simplified to 10% here)
   const atrRisk = stockData.atr > 0 ? (stockData.atr * 1.5) : (stockData.price * 0.05);
   const stopLossPrice = mode === 'SHORT_TERM' 
       ? stockData.price - atrRisk 
@@ -179,11 +263,8 @@ export const calculateInvestment = (
   const entrySuggestion = stockData.price; 
   const shares = Math.floor(amountTWD / (entrySuggestion * exchangeRate));
   
-  // Target Logic
-  // Short Term: Entry + 2 * ATR (Reward is roughly 1.33x Risk if Risk is 1.5 ATR)
-  // Long Term: Entry + 20% (Standard Value Investing Target)
   const targetPrice = mode === 'SHORT_TERM' 
-      ? entrySuggestion + (stockData.atr > 0 ? stockData.atr * 2 : stockData.price * 0.1)
+      ? entrySuggestion + (stockData.atr > 0 ? stockData.atr * 3 : stockData.price * 0.15)
       : entrySuggestion * 1.2;
 
   const potentialGain = (targetPrice - entrySuggestion) * shares * exchangeRate;
@@ -199,6 +280,6 @@ export const calculateInvestment = (
     potentialGain: parseFloat(potentialGain.toFixed(0)),
     potentialGainPercent: parseFloat(potentialPercent.toFixed(2)),
     stopLossPrice: parseFloat(stopLossPrice.toFixed(2)),
-    riskRewardRatio: mode === 'SHORT_TERM' ? '1 : 1.3' : 'N/A (Value)'
+    riskRewardRatio: mode === 'SHORT_TERM' ? '1 : 2.0' : 'N/A (Value)'
   };
 };
