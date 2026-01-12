@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import YahooFinance from 'yahoo-finance2'; 
@@ -298,7 +299,19 @@ app.get('/api/stock/:symbol', async (req, res) => {
         }
     }
     
-    if (!lastTradeTime) lastTradeTime = Date.now();
+    // Safety check for lastTradeTime
+    if (!lastTradeTime) {
+        lastTradeTime = Date.now();
+    } else if (lastTradeTime instanceof Date) {
+        lastTradeTime = lastTradeTime.getTime();
+    }
+    
+    // Correct seconds to milliseconds if needed (simple heuristic: if year < 1980)
+    // 315532800000 is approx year 1980 in ms. 3155328000 is year 2070 in seconds.
+    // If < 100000000000 (roughly year 1973 in ms), assume it's seconds.
+    if (typeof lastTradeTime === 'number' && lastTradeTime < 100000000000) {
+        lastTradeTime *= 1000;
+    }
 
     // --- Indicator Calc (Always uses Yahoo Chart History) ---
     const history = historyResult?.quotes || [];
@@ -313,6 +326,9 @@ app.get('/api/stock/:symbol', async (req, res) => {
     const ma60 = calculateSMA(validHistory, 60);
     const ma120 = calculateSMA(validHistory, 120);
     const ma240 = calculateSMA(validHistory, 240);
+    // NEW: Calculate Previous MA240
+    const ma240Prev = calculateSMA(validHistory.slice(0, -1), 240);
+
     const vol5 = calculateVolSMA(validHistory, 5);
     const vol20 = calculateVolSMA(validHistory, 20);
     const atr = calculateATR(validHistory, 14);
@@ -330,6 +346,19 @@ app.get('/api/stock/:symbol', async (req, res) => {
     const macdLine = ema12 - ema26;
     const signalLine = macdLine * 0.8; 
     const macdHist = macdLine - signalLine;
+
+    const recentHistorySample = validHistory.slice(-30).map(q => {
+      const dateValue = q.date ? new Date(q.date) : (q.timestamp ? new Date(q.timestamp * 1000) : null);
+      const dateStr = dateValue ? dateValue.toISOString().split('T')[0] : '';
+      return {
+        date: dateStr,
+        open: q.open ?? 0,
+        high: q.high ?? 0,
+        low: q.low ?? 0,
+        close: q.close ?? 0,
+        volume: q.volume ?? 0
+      };
+    });
 
     // Use Yahoo's metadata for name/market as it's usually cleaner
     const metaData = yahooQuote || (historyResult.meta) || {};
@@ -361,7 +390,7 @@ app.get('/api/stock/:symbol', async (req, res) => {
       institutionalOwnership: 0, 
       
       // Technicals
-      ma5, ma10, ma20, ma20Prev, ma60, ma120, ma240,
+      ma5, ma10, ma20, ma20Prev, ma60, ma120, ma240, ma240Prev,
       rsi, rsiPrev,
       atr,
       kValue: k, dValue: d,
@@ -369,10 +398,12 @@ app.get('/api/stock/:symbol', async (req, res) => {
       
       isMarketOpen: metaData.marketState === 'REGULAR' || metaData.marketState === 'OPEN', 
       isDelayed: isDelayed,
-      lastTradeTime: new Date(lastTradeTime).getTime(),
+      lastTradeTime: lastTradeTime,
       currency: metaData.currency || 'USD',
       exchange: metaData.exchangeName,
-      dataSource: source // Debug info
+      dataSource: source, // Debug info
+      assetType: metaData.quoteType === 'ETF' ? 'ETF' : 'STOCK',
+      recentHistorySample
     };
 
     res.json(stockData);

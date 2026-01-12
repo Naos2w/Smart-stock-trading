@@ -1,5 +1,5 @@
 export type Market = 'TW' | 'US' | 'HK' | 'OTHER';
-export type InvestmentMode = 'SHORT_TERM' | 'LONG_TERM';
+export type InvestmentMode = 'SHORT_TERM' | 'LONG_TERM' | 'ETF';
 export type AppLanguage = 'en' | 'zh';
 
 export interface UserProfile {
@@ -14,6 +14,15 @@ export interface StockRaw {
   name: string;
   nameEn: string;
   market: string;
+}
+
+export interface DailyOHLCV {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
 export interface StockData extends StockRaw {
@@ -32,19 +41,20 @@ export interface StockData extends StockRaw {
   ma5: number;
   ma10: number;
   ma20: number;
-  ma20Prev: number; // Added for Slope Calculation
+  ma20Prev: number;
   ma60: number;
   ma120: number;
   ma240: number;
+  ma240Prev: number;
   
   rsi: number;
-  rsiPrev: number; // For divergence check
+  rsiPrev: number;
   
   // MACD
   macdLine: number;
   signalLine: number;
   macdHist: number;
-  macdHistPrev: number; // For trend check
+  macdHistPrev: number;
 
   // KD (Stochastic)
   kValue: number;
@@ -63,28 +73,30 @@ export interface StockData extends StockRaw {
   institutionalAction: string; 
   
   tags: StockTag[];
-  updatedAt: number;     // Local fetch time
-  lastTradeTime: number; // Data source time
-  isDelayed: boolean;    // Is data delayed by exchange?
+  updatedAt: number;
+  lastTradeTime: number;
+  isDelayed: boolean;
   isMarketOpen: boolean;
   currency: string;
   exchange: string;
+  assetType: 'STOCK' | 'ETF';
+  recentHistorySample?: DailyOHLCV[];
 }
 
 export interface StockTag {
   label: string;
-  desc?: string; // Description for tooltip
+  desc?: string;
   type: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
   category: 'TECHNICAL' | 'FUNDAMENTAL' | 'CHIPS' | 'RISK';
-  scoreImpact?: number; // Internal score for sorting/weighting
+  scoreImpact?: number;
 }
 
 export interface StrategyResult {
     id: string;
     name: string;
     desc: string;
-    entryPrice: number; // Can be start of range
-    entryPriceHigh?: number; // End of range
+    entryPrice: number;
+    entryPriceHigh?: number;
     stopLoss: number;
     targetPrice: number;
     riskRewardRatio: number;
@@ -92,40 +104,106 @@ export interface StrategyResult {
     note: string;
 }
 
-export interface CalculatorResult {
-  investAmountTWD: number;
-  sharePrice: number;
-  exchangeRate: number; 
-  shares: number;
-  entrySuggestion: number;
-  targetPrice: number;
-  potentialGain: number;
-  potentialGainPercent: number;
-  riskRewardRatio: string;
-  stopLossPrice: number;
-}
+  export type ScoreAction =
+    | 'ENTER'
+    | 'WATCH'
+    | 'AVOID'
+    | 'INVEST'
+    | 'SCALE_IN'
+    | 'WAIT'
+    | 'BUY'
+    | 'DCA';
 
-export interface SwingScoreResult {
+  export interface ScoreResult {
     totalScore: number;
+    action: ScoreAction;
+    details: Record<string, number>;
+    tagsUsed?: StockTag[];
+  }
+
+  export interface SwingScoreResult extends ScoreResult {
     action: 'ENTER' | 'WATCH' | 'AVOID';
     details: {
-        trend: number;
-        momentum: number;
-        volume: number;
-        risk: number;
-    }
-}
+      trend: number;
+      momentum: number;
+      volume: number;
+      risk: number;
+    };
+  }
+
+  export interface LongTermScoreResult extends ScoreResult {
+    action: 'INVEST' | 'SCALE_IN' | 'WAIT';
+    details: {
+      trend: number;
+      structure: number;
+      drawdown: number;
+      volatility: number;
+    };
+  }
+
+  export interface EtfScoreResult extends ScoreResult {
+    action: 'BUY' | 'DCA' | 'WAIT';
+    details: {
+      trend: number;
+      proximity: number;
+      volatility: number;
+    };
+  }
+
+  export interface ShortTermInvestmentPlan {
+    mode: 'SHORT_TERM';
+    action: 'ENTER' | 'WATCH' | 'AVOID';
+    entryZone: [number, number];
+    stopLoss: number;
+    target: number;
+    holdingDaysRecommendation: string;
+  }
+
+  export interface LongTermInvestmentPlan {
+    mode: 'LONG_TERM';
+    action: 'INVEST' | 'SCALE_IN' | 'WAIT';
+    allocationHint: 'periodic' | 'split';
+    riskNote: string;
+    suggestedEntryZone?: [number, number];
+  }
+
+  export interface EtfInvestmentPlan {
+    mode: 'ETF';
+    action: 'BUY' | 'DCA' | 'WAIT';
+    allocationHint: 'one_time' | 'dca';
+    volatilityLevel: 'LOW' | 'MED' | 'HIGH';
+    riskNote: string;
+    suggestedEntryZone?: [number, number];
+  }
+
+  export type CalculatorResult =
+    | ShortTermInvestmentPlan
+    | LongTermInvestmentPlan
+    | EtfInvestmentPlan;
+
+  export interface GeminiInsightPayload {
+    mode: InvestmentMode;
+    assetType: 'STOCK' | 'ETF';
+    market: string;
+    symbol: string;
+    price: number;
+    scoreResult: ScoreResult;
+    tags: StockTag[];
+    strategies: StrategyResult[];
+    focusStrategyId?: string | null;
+    investmentPlan: CalculatorResult;
+    recentHistorySample: DailyOHLCV[];
+  }
 
 // Shared Color Logic for TW vs US Markets
 export const getMarketColors = (market: string) => {
-    const isTW = market.includes('TW') || market.includes('TAI');
+    const isTW = market.includes('TW') || market.includes('Tai');
     
     // Base Colors
     const neutralText = 'text-gray-900 dark:text-white';
     const neutralBg = 'bg-gray-500';
     const neutralBadge = 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
 
-    // Style Definitions
     const redStyle = {
         text: 'text-red-500',
         bg: 'bg-red-500',
@@ -141,39 +219,25 @@ export const getMarketColors = (market: string) => {
     };
 
     if (isTW) {
-        // TW Market: Up = Red, Down = Green
         return {
-            // Price / Trend Colors
             upText: redStyle.text,
             downText: greenStyle.text,
             upBg: redStyle.bg,
             downBg: greenStyle.bg,
-            
-            // Sentiment Badges (Tags & Status)
-            // Positive/Bullish -> Red in TW
             sentimentBull: redStyle.badge,
-            // Negative/Bearish -> Green in TW
             sentimentBear: greenStyle.badge,
-            
             neutralText,
             neutralBg,
             neutralBadge
         };
     } else {
-        // US Market: Up = Green, Down = Red
         return {
-            // Price / Trend Colors
             upText: greenStyle.text,
             downText: redStyle.text,
             upBg: greenStyle.bg,
             downBg: redStyle.bg,
-            
-            // Sentiment Badges (Tags & Status)
-            // Positive/Bullish -> Green in US
             sentimentBull: greenStyle.badge,
-            // Negative/Bearish -> Red in US
             sentimentBear: redStyle.badge,
-
             neutralText,
             neutralBg,
             neutralBadge
@@ -183,7 +247,7 @@ export const getMarketColors = (market: string) => {
 
 export const TRANSLATIONS = {
   en: {
-    searchPlaceholder: 'Search Symbol or Name (e.g., TSMC, NVDA)...',
+    searchPlaceholder: 'Search Symbol (e.g., TSMC, QQQ)...',
     stockSearch: 'Search',
     watchlist: 'Watchlist',
     login: 'Login',
@@ -193,7 +257,8 @@ export const TRANSLATIONS = {
     strategyGuide: 'Strategy Guide',
     learnMore: 'Learn Logic',
     shortTerm: 'Swing Trading',
-    longTerm: 'Long Term',
+    longTerm: 'Individual Stock',
+    etf: 'ETF Investing',
     volume: 'Vol',
     mktCap: 'Mkt Cap',
     aiInsight: 'Gemini AI Check',
@@ -204,6 +269,8 @@ export const TRANSLATIONS = {
     opportunityDesc: 'Setup matches your strategy.',
     calculate: 'Calculator & AI',
     calculatorTitle: 'Strategy Pipeline',
+    calculatorLongTitle: 'Long-Term Planner',
+    calculatorEtfTitle: 'ETF Planner',
     investAmount: 'Invest Amount',
     currentPrice: 'Current Price',
     exchangeRate: 'Exchange Rate',
@@ -247,6 +314,11 @@ export const TRANSLATIONS = {
     actionEnter: 'ENTER',
     actionWatch: 'WATCH',
     actionAvoid: 'AVOID',
+    actionInvest: 'INVEST',
+    actionScaleIn: 'SCALE IN',
+    actionWait: 'WAIT',
+    actionBuy: 'BUY',
+    actionDca: 'DCA',
     loading: 'Loading...',
     entryZone: 'Entry Zone',
     estProfit: 'Est. Profit',
@@ -260,6 +332,7 @@ export const TRANSLATIONS = {
     statusNeutral: 'Neutral',
     modeShort: 'Short Term',
     modeLong: 'Long Term',
+    modeEtf: 'ETF',
     structure: 'Structure',
     momentum: 'Momentum',
     bullish: 'Bullish',
@@ -270,10 +343,30 @@ export const TRANSLATIONS = {
     scoreTrend: 'Trend',
     scoreMomentum: 'Momentum',
     scoreVol: 'Volume',
-    scoreRisk: 'Risk'
+    scoreRisk: 'Risk',
+    scoreStructure: 'Structure',
+    scoreDrawdown: 'Drawdown',
+    scoreVolatility: 'Volatility',
+    scoreProximity: 'MA240 Distance',
+    allocation: 'Allocation Hint',
+    volatility: 'Volatility Level',
+    riskNotes: 'Risk Notes',
+    tagsHeadline: 'Signal Tags',
+    actionSummary: 'Action Summary',
+    investmentPlan: 'Investment Plan',
+    periodic: 'Periodic',
+    split: 'Split',
+    oneTime: 'One-time',
+    dca: 'DCA',
+    low: 'Low',
+    med: 'Med',
+    high: 'High',
+    holdingDays: 'Holding Days',
+    suggestedZone: 'Suggested Zone',
+    riskNoteLabel: 'Risk Note'
   },
   zh: {
-    searchPlaceholder: '輸入代號或名稱 (如 2330, Nvidia)...',
+    searchPlaceholder: '輸入代號或名稱 (如 2330, QQQ)...',
     stockSearch: '搜尋',
     watchlist: '自選清單',
     login: '登入',
@@ -283,7 +376,8 @@ export const TRANSLATIONS = {
     strategyGuide: '投資策略指南',
     learnMore: '學習邏輯',
     shortTerm: '波段交易',
-    longTerm: '長期投資',
+    longTerm: '個股長期',
+    etf: 'ETF 投資',
     volume: '成交量',
     mktCap: '市值',
     aiInsight: 'Gemini AI 健檢',
@@ -294,6 +388,8 @@ export const TRANSLATIONS = {
     opportunityDesc: '符合策略模型',
     calculate: '試算 & AI',
     calculatorTitle: '策略檢核',
+    calculatorLongTitle: '長期配置試算',
+    calculatorEtfTitle: 'ETF 配置試算',
     investAmount: '預計投入',
     currentPrice: '目前股價',
     exchangeRate: '匯率',
@@ -332,11 +428,16 @@ export const TRANSLATIONS = {
     step3Desc: '停損與停利點位',
     step4Desc: '檢查風報比是否 >= 2',
     passed: '通過',
-    failed: '未通過',
-    score: '波段總分',
-    actionEnter: '可進場',
-    actionWatch: '觀察中',
-    actionAvoid: '建議觀望',
+    failed: '警示',
+    score: '總分',
+    actionEnter: '建議進場',
+    actionWatch: '持續觀察',
+    actionAvoid: '建議避開',
+    actionInvest: '建議投資',
+    actionScaleIn: '分批佈局',
+    actionWait: '等待機會',
+    actionBuy: '直接買進',
+    actionDca: '定期定額',
     loading: '載入中...',
     entryZone: '進場區間',
     estProfit: '預估獲利',
@@ -349,7 +450,8 @@ export const TRANSLATIONS = {
     statusRisk: '風險/減碼',
     statusNeutral: '中立觀望',
     modeShort: '波段模式',
-    modeLong: '存股模式',
+    modeLong: '個股存股',
+    modeEtf: 'ETF 模式',
     structure: '結構',
     momentum: '動能',
     bullish: '多頭排列',
@@ -360,6 +462,26 @@ export const TRANSLATIONS = {
     scoreTrend: '趨勢',
     scoreMomentum: '動能',
     scoreVol: '量能',
-    scoreRisk: '風險'
+    scoreRisk: '風險',
+    scoreStructure: '結構',
+    scoreDrawdown: '回檔幅度',
+    scoreVolatility: '波動',
+    scoreProximity: '年線距離',
+    allocation: '配置建議',
+    volatility: '波動等級',
+    riskNotes: '風險筆記',
+    tagsHeadline: '訊號標籤',
+    actionSummary: '行動摘要',
+    investmentPlan: '投資方案',
+    periodic: '定期',
+    split: '分批',
+    oneTime: '單筆',
+    dca: '定期定額',
+    low: '低',
+    med: '中',
+    high: '高',
+    holdingDays: '持有天數',
+    suggestedZone: '建議區間',
+    riskNoteLabel: '風險備註'
   }
 };

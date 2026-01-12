@@ -1,6 +1,29 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { CalculatorResult, InvestmentMode, StockData, AppLanguage, TRANSLATIONS, getMarketColors, StrategyResult, SwingScoreResult } from '../types';
-import { calculateInvestment, calculateSwingStrategies, calculateSwingScore } from '../services/stockService';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import {
+    InvestmentMode,
+    StockData,
+    AppLanguage,
+    TRANSLATIONS,
+    getMarketColors,
+    StrategyResult,
+    SwingScoreResult,
+    LongTermScoreResult,
+    EtfScoreResult,
+    ShortTermInvestmentPlan,
+    LongTermInvestmentPlan,
+    EtfInvestmentPlan,
+    StockTag
+} from '../types';
+import {
+    calculateSwingStrategies,
+    calculateSwingScore,
+    calculateLongTermScore,
+    calculateEtfScore,
+    calculateShortTermInvestment,
+    calculateLongTermInvestment,
+    calculateEtfInvestment,
+    generateTags
+} from '../services/stockService';
 import { getGeminiInsight } from '../services/geminiService';
 
 interface Props {
@@ -13,35 +36,74 @@ interface Props {
 
 const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }) => {
   const [amount, setAmount] = useState<string>('50000'); 
-  const [strategies, setStrategies] = useState<StrategyResult[]>([]);
-  const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
-  const [swingScore, setSwingScore] = useState<SwingScoreResult | null>(null);
-  const [aiAnalysis, setAiAnalysis] = useState<string>('');
-  const [isAiLoading, setIsAiLoading] = useState(false);
+    const [strategies, setStrategies] = useState<StrategyResult[]>([]);
+    const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
+    const [aiAnalysis, setAiAnalysis] = useState<string>('');
+    const [isAiLoading, setIsAiLoading] = useState(false);
   
-  const lastSymbolRef = useRef<string>(stock.symbol);
-  const [longTermResult, setLongTermResult] = useState<CalculatorResult | null>(null);
+    const lastSymbolRef = useRef<string>(stock.symbol);
 
   const t = TRANSLATIONS[lang];
   const marketColors = getMarketColors(stock.market);
 
-  useEffect(() => {
-    if (isOpen && stock) {
-        if (mode === 'SHORT_TERM') {
-            const calculated = calculateSwingStrategies(stock);
-            setStrategies(calculated);
-            setSwingScore(calculateSwingScore(stock));
+      const scoreResult = useMemo(() => {
+          if (mode === 'SHORT_TERM') return calculateSwingScore(stock, lang);
+          if (mode === 'LONG_TERM') return calculateLongTermScore(stock, lang);
+          return calculateEtfScore(stock, lang);
+      }, [stock, lang, mode]);
 
-            // Don't auto-select. Force user to choose in Step 2.
-            if (stock.symbol !== lastSymbolRef.current) {
-                 setSelectedStrategyId(null);
-            }
-        } else {
-            const val = parseFloat(amount) || 0;
-            setLongTermResult(calculateInvestment(val, stock, mode));
+      const investmentPlan = useMemo<ShortTermInvestmentPlan | LongTermInvestmentPlan | EtfInvestmentPlan>(() => {
+          if (mode === 'SHORT_TERM') {
+              return calculateShortTermInvestment(stock, scoreResult as SwingScoreResult);
+          }
+          if (mode === 'LONG_TERM') {
+              return calculateLongTermInvestment(stock, scoreResult as LongTermScoreResult);
+          }
+          return calculateEtfInvestment(stock, scoreResult as EtfScoreResult);
+      }, [stock, mode, scoreResult]);
+
+      const modeTags = useMemo<StockTag[]>(() => {
+          if (scoreResult.tagsUsed && scoreResult.tagsUsed.length > 0) return scoreResult.tagsUsed;
+          return generateTags(stock, stock.assetType, lang, mode);
+      }, [scoreResult, stock, lang, mode]);
+
+    const swingScore = mode === 'SHORT_TERM' ? (scoreResult as SwingScoreResult) : null;
+    const longTermScore = mode === 'LONG_TERM' ? (scoreResult as LongTermScoreResult) : null;
+    const etfScore = mode === 'ETF' ? (scoreResult as EtfScoreResult) : null;
+    const nonSwingPlan = mode === 'SHORT_TERM' ? null : (investmentPlan as LongTermInvestmentPlan | EtfInvestmentPlan);
+
+      const detailEntries = useMemo(() => {
+          if (mode === 'LONG_TERM' && longTermScore) {
+              return [
+                  { label: t.scoreTrend, value: longTermScore.details.trend },
+                  { label: t.scoreStructure, value: longTermScore.details.structure },
+                  { label: t.scoreDrawdown, value: longTermScore.details.drawdown },
+                  { label: t.scoreVolatility, value: longTermScore.details.volatility }
+              ];
+          }
+          if (mode === 'ETF' && etfScore) {
+              return [
+                  { label: t.scoreTrend, value: etfScore.details.trend },
+                  { label: t.scoreProximity, value: etfScore.details.proximity },
+                  { label: t.scoreVolatility, value: etfScore.details.volatility }
+              ];
+          }
+          return [];
+      }, [mode, longTermScore, etfScore, t]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (mode === 'SHORT_TERM') {
+        const calculated = calculateSwingStrategies(stock);
+        setStrategies(calculated);
+        if (stock.symbol !== lastSymbolRef.current) {
+            setSelectedStrategyId(null);
         }
+    } else {
+        setStrategies([]);
+        setSelectedStrategyId(null);
     }
-  }, [stock, mode, isOpen, amount]);
+  }, [stock, mode, isOpen]);
 
   useEffect(() => {
       if (stock.symbol !== lastSymbolRef.current) {
@@ -51,11 +113,8 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
   }, [stock.symbol]);
 
   useEffect(() => {
-      if (mode === 'LONG_TERM' && stock) {
-          const val = parseFloat(amount);
-          if(!isNaN(val)) setLongTermResult(calculateInvestment(val, stock, mode));
-      }
-  }, [amount, mode, stock]);
+      setAiAnalysis('');
+  }, [mode]);
 
   const handleStrategySelect = (id: string) => {
       if (id !== selectedStrategyId) {
@@ -64,32 +123,35 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
       }
   };
 
-  const handleAskAi = async () => {
-      if (!stock || !selectedStrategyId) return;
-      const strategy = strategies.find(s => s.id === selectedStrategyId);
-      setIsAiLoading(true);
-      setAiAnalysis('');
-      try {
-        const insight = await getGeminiInsight(stock, mode, lang, strategy);
-        setAiAnalysis(insight);
-      } catch (e) {
-        setAiAnalysis("AI Error.");
-      } finally {
-        setIsAiLoading(false);
-      }
-  };
+    const handleAskAi = async () => {
+            if (!stock) return;
+            if (mode === 'SHORT_TERM' && !selectedStrategyId) return;
 
-  const handleAskAiLongTerm = async () => {
-      setIsAiLoading(true);
-      try {
-        const insight = await getGeminiInsight(stock, mode, lang);
-        setAiAnalysis(insight);
-      } catch (e) {
-          setAiAnalysis("AI Error");
-      } finally {
-          setIsAiLoading(false);
-      }
-  }
+            const payload = {
+                    mode,
+                    assetType: stock.assetType,
+                    market: stock.market,
+                    symbol: stock.symbol,
+                    price: stock.price,
+                    scoreResult,
+                    tags: modeTags,
+                    strategies: mode === 'SHORT_TERM' ? strategies : [],
+                    focusStrategyId: mode === 'SHORT_TERM' ? selectedStrategyId : undefined,
+                    investmentPlan,
+                    recentHistorySample: stock.recentHistorySample ?? []
+            };
+
+            setIsAiLoading(true);
+            setAiAnalysis('');
+            try {
+                const insight = await getGeminiInsight(payload, lang);
+                setAiAnalysis(insight);
+            } catch (e) {
+                setAiAnalysis('AI Error.');
+            } finally {
+                setIsAiLoading(false);
+            }
+    };
 
   if (!isOpen) return null;
 
@@ -105,17 +167,67 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
       });
   }
 
-  const getActionColor = (action: string) => {
-      if (action === 'ENTER') return 'bg-green-500';
-      if (action === 'WATCH') return 'bg-yellow-500';
-      return 'bg-red-500';
-  }
+  const getActionClass = (action: string) => {
+      if (['ENTER', 'INVEST', 'BUY', 'SCALE_IN', 'DCA'].includes(action)) return marketColors.sentimentBull;
+      if (['WATCH', 'WAIT'].includes(action)) return marketColors.neutralBadge;
+      return marketColors.sentimentBear;
+  };
+
+  const getTagClass = (tag: StockTag) => {
+      if (tag.type === 'POSITIVE') return marketColors.sentimentBull;
+      if (tag.type === 'NEGATIVE') return marketColors.sentimentBear;
+      return marketColors.neutralBadge;
+  };
 
   const getActionText = (action: string) => {
-      if (action === 'ENTER') return t.actionEnter;
-      if (action === 'WATCH') return t.actionWatch;
-      return t.actionAvoid;
-  }
+      switch (action) {
+          case 'ENTER':
+              return t.actionEnter;
+          case 'WATCH':
+              return t.actionWatch;
+          case 'AVOID':
+              return t.actionAvoid;
+          case 'INVEST':
+              return t.actionInvest;
+          case 'SCALE_IN':
+              return t.actionScaleIn;
+          case 'WAIT':
+              return t.actionWait;
+          case 'BUY':
+              return t.actionBuy;
+          case 'DCA':
+              return t.actionDca;
+          default:
+              return action;
+      }
+  };
+
+  const getAllocationLabel = (hint: string) => {
+      switch (hint) {
+          case 'periodic':
+              return t.periodic;
+          case 'split':
+              return t.split;
+          case 'one_time':
+              return t.oneTime;
+          case 'dca':
+              return t.dca;
+          default:
+              return hint;
+      }
+  };
+
+  const getVolatilityLabel = (level?: string) => {
+      switch (level) {
+          case 'LOW':
+              return t.low;
+          case 'HIGH':
+              return t.high;
+          case 'MED':
+          default:
+              return t.med;
+      }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
@@ -125,7 +237,11 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
         <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center sticky top-0 bg-white/90 dark:bg-dark-surface/90 backdrop-blur-xl z-10">
             <div>
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                    {mode === 'SHORT_TERM' ? t.calculatorTitle : '長期存股試算'}
+                    {mode === 'SHORT_TERM'
+                        ? t.calculatorTitle
+                        : mode === 'LONG_TERM'
+                            ? t.calculatorLongTitle
+                            : t.calculatorEtfTitle}
                 </h2>
                 <p className="text-xs text-gray-500 font-medium">{stock.name} ({stock.symbol}) - Price: {stock.price}</p>
             </div>
@@ -149,7 +265,8 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
                 />
             </div>
 
-            {mode === 'SHORT_TERM' && swingScore ? (
+            {mode === 'SHORT_TERM' ? (
+                swingScore ? (
                 <>
                     {/* STEP 1: Swing Score Analysis */}
                     <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden">
@@ -164,7 +281,7 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
                                 </div>
                                 <div className="flex flex-col">
                                     <span className="text-xs text-gray-500 uppercase font-bold">{t.score}</span>
-                                    <span className={`px-3 py-1 text-xs font-bold text-white rounded-full mt-1 w-fit ${getActionColor(swingScore.action)}`}>
+                                    <span className={`px-3 py-1 text-xs font-bold rounded-full mt-1 w-fit ${getActionClass(swingScore.action)}`}>
                                         {getActionText(swingScore.action)}
                                     </span>
                                 </div>
@@ -254,12 +371,12 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
                                         <span className="text-lg font-bold dark:text-white">R:R = {currentStrategy.riskRewardRatio.toFixed(1)}</span>
                                     </div>
                                     {currentStrategy.riskRewardRatio >= 2 ? (
-                                        <span className="px-3 py-1 bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300 border border-green-200 dark:border-green-500/30 text-xs font-bold rounded-full">
-                                          {t.passed}
+                                        <span className="px-3 py-1 bg-green-500/10 text-green-600 dark:text-green-400 text-xs font-semibold rounded-full tracking-wide">
+                                            {t.passed}
                                         </span>
                                     ) : (
-                                        <span className="px-3 py-1 bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300 border border-red-200 dark:border-red-500/30 text-xs font-bold rounded-full">
-                                          {t.failed} (&gt; 2)
+                                        <span className="px-3 py-1 bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-semibold rounded-full tracking-wide">
+                                            {t.failed}
                                         </span>
                                     )}
                                 </div>
@@ -299,36 +416,108 @@ const CalculatorModal: React.FC<Props> = ({ isOpen, onClose, stock, mode, lang }
                          </div>
                     )}
                 </>
-            ) : (
-                 // Long Term View (Unchanged basically)
+                    ) : null
+                ) : (
                  <div className="space-y-4">
-                    {longTermResult && (
-                        <div className="bg-gray-50 dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700">
-                            <div className="flex justify-between items-center mb-4">
-                                <span className="text-gray-500">建議進場 (年線附近)</span>
-                                <span className={`text-xl font-bold ${marketColors.upText}`}>{longTermResult.entrySuggestion}</span>
+                    <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+                        <div className="bg-gray-50 dark:bg-gray-800/50 px-4 py-3 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center">
+                            <h3 className="font-bold text-sm text-gray-900 dark:text-white">{t.trendCheck}</h3>
+                            <span className="text-[10px] font-semibold uppercase text-gray-400">
+                                {mode === 'LONG_TERM' ? t.modeLong : t.modeEtf}
+                            </span>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                <div className="flex items-center gap-4">
+                                    <div className="relative w-16 h-16 flex items-center justify-center rounded-full border-4 border-gray-100 dark:border-gray-700">
+                                        <span className="text-xl font-bold dark:text-white">{scoreResult.totalScore}</span>
+                                        <span className="absolute text-[8px] text-gray-400 bottom-2">/100</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="text-xs text-gray-500 uppercase font-bold">{t.score}</span>
+                                        <span className={`px-3 py-1 text-xs font-bold rounded-full mt-1 w-fit ${getActionClass(scoreResult.action)}`}>
+                                            {getActionText(scoreResult.action)}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-right">
+                                    {detailEntries.map((entry, idx) => (
+                                        <div key={idx} className="text-xs">
+                                            <span className="text-gray-400 mr-2">{entry.label}</span>
+                                            <span className="font-bold dark:text-white">{entry.value}</span>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
-                            <div className="flex justify-between items-center mb-4">
-                                <span className="text-gray-500">預估股數</span>
-                                <span className="text-xl font-bold dark:text-white">{longTermResult.shares}</span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                                <span className="text-gray-500">潛在獲利 (+20%)</span>
-                                <span className={`text-xl font-bold ${marketColors.upText}`}>+{longTermResult.potentialGain.toLocaleString()}</span>
+                            <div>
+                                <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">{t.tagsHeadline}</span>
+                                {modeTags.length > 0 ? (
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        {modeTags.map((tag, idx) => (
+                                            <span
+                                                key={idx}
+                                                className={`px-2 py-0.5 rounded-md text-[10px] font-medium tracking-tight ${getTagClass(tag)}`}
+                                                title={tag.desc || tag.label}
+                                            >
+                                                {tag.label}
+                                                {typeof tag.scoreImpact === 'number' && (
+                                                    <span className="ml-1 font-semibold">
+                                                        {tag.scoreImpact > 0 ? `+${tag.scoreImpact}` : tag.scoreImpact}
+                                                    </span>
+                                                )}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <span className="text-xs text-gray-400 mt-2 block">{t.noSignals}</span>
+                                )}
                             </div>
                         </div>
-                    )}
-                    
+                    </div>
+
+                    <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+                        <div className="bg-gray-50 dark:bg-gray-800/50 px-4 py-3 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center">
+                            <h3 className="font-bold text-sm text-gray-900 dark:text-white">{t.investmentPlan}</h3>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${getActionClass(nonSwingPlan!.action)}`}>
+                                {getActionText(nonSwingPlan!.action)}
+                            </span>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="p-3 rounded-xl bg-gray-50 dark:bg-gray-800/60">
+                                    <span className="text-[10px] text-gray-500 uppercase font-bold block mb-1">{t.allocation}</span>
+                                    <span className="text-sm font-bold dark:text-white">{getAllocationLabel(nonSwingPlan!.allocationHint)}</span>
+                                </div>
+                                {mode === 'ETF' && (
+                                    <div className="p-3 rounded-xl bg-gray-50 dark:bg-gray-800/60">
+                                        <span className="text-[10px] text-gray-500 uppercase font-bold block mb-1">{t.volatility}</span>
+                                        <span className="text-sm font-bold dark:text-white">{getVolatilityLabel((nonSwingPlan as EtfInvestmentPlan).volatilityLevel)}</span>
+                                    </div>
+                                )}
+                                {nonSwingPlan?.suggestedEntryZone && (
+                                    <div className="p-3 rounded-xl bg-gray-50 dark:bg-gray-800/60">
+                                        <span className="text-[10px] text-gray-500 uppercase font-bold block mb-1">{t.suggestedZone}</span>
+                                        <span className="text-sm font-bold dark:text-white">{nonSwingPlan.suggestedEntryZone[0]} - {nonSwingPlan.suggestedEntryZone[1]}</span>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+                                <strong className="mr-1 text-gray-500 dark:text-gray-400">{t.riskNoteLabel}:</strong>
+                                {nonSwingPlan!.riskNote}
+                            </div>
+                        </div>
+                    </div>
+
                     <button
-                        onClick={handleAskAiLongTerm}
+                        onClick={handleAskAi}
                         disabled={isAiLoading}
                         className="w-full py-3.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition active:scale-95 shadow-lg"
                     >
-                        {isAiLoading ? t.analyzing : t.askAi}
+                        {isAiLoading ? t.analyzing : `✨ ${t.askAi}`}
                     </button>
 
                     {aiAnalysis && (
-                         <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-800 mt-4">
+                         <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-800 mt-2">
                              {renderAiText(aiAnalysis)}
                          </div>
                     )}

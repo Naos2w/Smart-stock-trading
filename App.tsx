@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { StockRaw, StockData, InvestmentMode, StockTag, AppLanguage, TRANSLATIONS, UserProfile, getMarketColors } from './types';
-import { fetchStockData, searchStocks, checkBackendHealth, calculateSwingScore } from './services/stockService';
+import { fetchStockData, searchStocks, checkBackendHealth, calculateSwingScore, calculateLongTermScore, calculateEtfScore, generateTags } from './services/stockService';
 import { SearchIcon, MoonIcon, SunIcon, HeartIcon, RefreshIcon, CalculatorIcon, TrendUpIcon, TrendDownIcon, SortIcon, PlayIcon, PauseIcon } from './components/Icons';
 import CalculatorModal from './components/CalculatorModal';
 import StrategyGuide from './components/StrategyGuide';
@@ -303,21 +303,15 @@ export default function App() {
 
   const isFav = (symbol: string) => watchlistSymbols.includes(symbol);
 
-  // UPDATED SORTING LOGIC: Use Calculate Swing Score directly
+  // UPDATED SORTING LOGIC: Use Score Engines
   const getSuitabilityScore = (stock: StockData): number => {
       if (investmentMode === 'SHORT_TERM') {
-          // Use the EXACT 0-100 score from the new Swing Engine
-          return calculateSwingScore(stock).totalScore;
+        return calculateSwingScore(stock, language).totalScore;
+      } else if (investmentMode === 'LONG_TERM') {
+        return calculateLongTermScore(stock, language).totalScore;
+      } else {
+        return calculateEtfScore(stock, language).totalScore;
       }
-      
-      // Long Term Simple Weighting (0-100 Approximation)
-      let score = 50; 
-      if (stock.price > stock.ma240) score += 20; else score -= 20;
-      if (stock.roe > 15) score += 10;
-      if (stock.institutionalOwnership > 40) score += 10;
-      if (stock.dividendYield > 4) score += 10;
-      
-      return Math.max(0, Math.min(100, score));
   };
 
   const getCardStyle = () => {
@@ -326,19 +320,23 @@ export default function App() {
 
   const getStatusLabel = (score: number, market: string) => {
       const colors = getMarketColors(market);
-      // Thresholds based on 0-100 score
-      if (score >= 80) return { 
-          text: investmentMode === 'SHORT_TERM' ? t.statusBuy : t.statusValue, 
-          className: colors.sentimentBull 
-      };
-      if (score <= 60) return { 
-          text: t.statusRisk, 
-          className: colors.sentimentBear 
-      };
-      return { 
-          text: t.statusNeutral, 
-          className: colors.neutralBadge
-      };
+      
+      if (investmentMode === 'SHORT_TERM') {
+        if (score >= 85) return { text: t.actionEnter, className: colors.sentimentBull };
+        if (score >= 70) return { text: t.actionWatch, className: colors.neutralBadge };
+        return { text: t.actionAvoid, className: colors.sentimentBear };
+      } 
+      else if (investmentMode === 'LONG_TERM') {
+        if (score >= 80) return { text: t.actionInvest, className: colors.sentimentBull };
+        if (score >= 60) return { text: t.actionScaleIn, className: colors.neutralBadge };
+        return { text: t.actionWait, className: colors.sentimentBear };
+      }
+      else {
+        // ETF
+        if (score >= 85) return { text: t.actionBuy, className: colors.sentimentBull };
+        if (score >= 70) return { text: t.actionDca, className: colors.neutralBadge };
+        return { text: t.actionWait, className: colors.sentimentBear };
+      }
   };
 
   const sortedAndFilteredWatchlist = useMemo(() => {
@@ -436,6 +434,8 @@ export default function App() {
         Icon = TrendDownIcon;
     }
 
+    const displayTags = generateTags(selectedStock, selectedStock.assetType, language, investmentMode);
+
     return (
       <div className="space-y-6 animate-fade-in pb-20">
         {/* Main Price Card */}
@@ -491,10 +491,10 @@ export default function App() {
              {renderStrategyGrid(selectedStock)}
 
              <div className="flex flex-wrap gap-2 mt-2">
-              {selectedStock.tags.map((tag, i) => (
+              {displayTags.map((tag, i) => (
                 <StockTagBadge key={i} tag={tag} market={selectedStock.market} />
               ))}
-              {selectedStock.tags.length === 0 && <span className="text-gray-400 text-xs italic">{t.noSignals}</span>}
+              {displayTags.length === 0 && <span className="text-gray-400 text-xs italic">{t.noSignals}</span>}
             </div>
         </div>
         
@@ -530,6 +530,7 @@ export default function App() {
                     const styleClass = getCardStyle();
                     const status = getStatusLabel(score, stock.market);
                     const colors = getMarketColors(stock.market);
+                  const stockTags = generateTags(stock, stock.assetType, language, investmentMode);
                     
                     let priceColor = colors.neutralText;
                     let badgeColor = colors.neutralBg;
@@ -580,7 +581,7 @@ export default function App() {
 
                             <div className="mt-3 flex justify-between items-end">
                                 <div className="flex gap-1 flex-wrap">
-                                    {stock.tags.slice(0, 2).map((t, i) => (
+                                    {stockTags.slice(0, 2).map((t, i) => (
                                         <StockTagBadge key={i} tag={t} market={stock.market} />
                                     ))}
                                 </div>
@@ -727,6 +728,7 @@ export default function App() {
                     options={[
                         { value: 'SHORT_TERM', label: t.shortTerm },
                         { value: 'LONG_TERM', label: t.longTerm },
+                        { value: 'ETF', label: t.modeEtf },
                     ]}
                  />
             </div>
